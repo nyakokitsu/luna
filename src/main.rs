@@ -6,7 +6,7 @@ use axum::{
     routing::{delete, get, post},
     Json, Router,
 };
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use flate2::read::GzDecoder;
 use mlua::{Lua, LuaOptions, LuaSerdeExt, StdLib};
 use serde::{Deserialize, Serialize};
@@ -29,6 +29,9 @@ use tower_http::trace::TraceLayer;
 use url::Url;
 use uuid::Uuid;
 
+mod rooms;
+use rooms::Room;
+
 #[derive(Parser)]
 struct Args {
     #[arg(long, default_value = "0.0.0.0:8099")]
@@ -37,6 +40,18 @@ struct Args {
     data_dir: PathBuf,
     #[arg(long)]
     model: Option<String>,
+    #[command(subcommand)]
+    command: Option<RuntimeCommand>,
+}
+
+#[derive(Subcommand)]
+enum RuntimeCommand {
+    /// Read, set or clear this runtime's optional room label without starting it.
+    Room {
+        value: Option<String>,
+        #[arg(long, conflicts_with = "value")]
+        clear: bool,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -222,6 +237,32 @@ struct DeviceProfile {
     architecture: String,
     features: Vec<String>,
     source: String,
+}
+/// Presentation metadata must not participate in hardware compatibility checks.
+#[derive(Debug, Serialize)]
+struct DeviceMetadata {
+    #[serde(flatten)]
+    profile: DeviceProfile,
+    room: Option<String>,
+}
+
+fn lua_device_metadata(
+    lua: &Lua,
+    device: DeviceProfile,
+    led_count: usize,
+    room: Room,
+) -> mlua::Result<mlua::Table> {
+    let table = lua.create_table()?;
+    table.set("model", device.model)?;
+    table.set("architecture", device.architecture)?;
+    table.set("led_count", led_count)?;
+    table.set("room", room.room)?;
+    let features = lua.create_table()?;
+    for (i, feature) in device.features.iter().enumerate() {
+        features.set(i + 1, feature.as_str())?;
+    }
+    table.set("features", features)?;
+    Ok(table)
 }
 #[derive(Debug, Clone)]
 struct Sensor {
@@ -1990,6 +2031,7 @@ fn lua_api_available(device: &DeviceProfile, name: &str) -> Result<bool> {
 
 async fn run_plugin(app: App, id: String, event: String, cancelled: Arc<AtomicBool>) -> Result<()> {
     let device = app.device.lock().await.clone();
+    let room = Room::load(&app.root)?;
     let led_count = app.led.settings.lock().await.count;
     let (manifest, root, allowed) = {
         let p = app.plugins.lock().await;
@@ -2555,16 +2597,10 @@ async fn run_plugin(app: App, id: String, event: String, cancelled: Arc<AtomicBo
         }
         globals.set("alice", api)?;
         globals.set("event", event)?;
-        let lua_device = lua.create_table()?;
-        lua_device.set("model", device.model)?;
-        lua_device.set("architecture", device.architecture)?;
-        lua_device.set("led_count", led_count)?;
-        let lua_features = lua.create_table()?;
-        for (i, feature) in device.features.iter().enumerate() {
-            lua_features.set(i + 1, feature.as_str())?;
-        }
-        lua_device.set("features", lua_features)?;
-        globals.set("device", lua_device)?;
+        globals.set(
+            "device",
+            lua_device_metadata(&lua, device, led_count, room)?,
+        )?;
         let launch_path = manifest.launch.path(&manifest).to_string();
         let source = fs::read_to_string(root.join(&launch_path))?;
         lua.load(&source).set_name(&launch_path).exec()?;
@@ -3105,9 +3141,9 @@ async fn runtime_device(
     State(a): State<App>,
     AxumPath(id): AxumPath<String>,
     headers: HeaderMap,
-) -> Result<Json<DeviceProfile>, ApiError> {
+) -> Result<Json<DeviceMetadata>, ApiError> {
     runtime_permission(&a, &id, &headers, "exec").await?;
-    Ok(Json(a.device.lock().await.clone()))
+    Ok(Json(device_metadata(&a).await?))
 }
 async fn runtime_sensors(
     State(a): State<App>,
@@ -3148,8 +3184,22 @@ async fn runtime_clock(
 async fn get_settings(State(a): State<App>) -> Json<Settings> {
     Json(a.settings.lock().await.clone())
 }
-async fn get_device(State(a): State<App>) -> Json<DeviceProfile> {
-    Json(a.device.lock().await.clone())
+async fn device_metadata(a: &App) -> Result<DeviceMetadata> {
+    Ok(DeviceMetadata {
+        profile: a.device.lock().await.clone(),
+        room: Room::load(&a.root)?.room,
+    })
+}
+async fn get_device(State(a): State<App>) -> Result<Json<DeviceMetadata>, ApiError> {
+    Ok(Json(device_metadata(&a).await?))
+}
+async fn get_room(State(a): State<App>) -> Result<Json<Room>, ApiError> {
+    Ok(Json(Room::load(&a.root)?))
+}
+async fn put_room(State(a): State<App>, Json(room): Json<Room>) -> Result<Json<Room>, ApiError> {
+    let room = room.normalized()?;
+    room.save(&a.root)?;
+    Ok(Json(room))
 }
 async fn get_sensors() -> Json<Vec<SensorInfo>> {
     Json(
@@ -3349,7 +3399,20 @@ fn start_auto_updater(app: App, executable: PathBuf, listen: String) {
 async fn main() -> Result<()> {
     tracing_subscriber::fmt().with_env_filter("info").init();
     let args = Args::parse();
+    if let Some(RuntimeCommand::Room { value, clear }) = args.command {
+        let room = if clear || value.is_some() {
+            let room = Room { room: value }.normalized()?;
+            fs::create_dir_all(&args.data_dir)?;
+            room.save(&args.data_dir)?;
+            room
+        } else {
+            Room::load(&args.data_dir)?
+        };
+        println!("{}", room.room.unwrap_or_default());
+        return Ok(());
+    }
     fs::create_dir_all(&args.data_dir)?;
+    Room::load(&args.data_dir)?;
     let settings_path = args.data_dir.join("settings.toml");
     // A broken settings.toml must not silently fall back to defaults: they
     // re-enable the web API and auto-updates.
@@ -3449,6 +3512,7 @@ async fn main() -> Result<()> {
             .route("/api/runtime/:id/clock", post(runtime_clock))
             .route("/api/settings", get(get_settings).put(put_settings))
             .route("/api/device", get(get_device).put(put_device))
+            .route("/api/room", get(get_room).put(put_room))
             .route("/api/sensors", get(get_sensors))
             .route("/api/clock", get(get_clock).put(put_clock))
             .route("/api/led", post(led_set))
@@ -3468,6 +3532,32 @@ const UI: &str = include_str!("../web/index.html");
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn room_is_presentation_metadata_in_json_and_lua() {
+        let profile = DeviceProfile {
+            model: "fixture".into(),
+            architecture: "test-arch".into(),
+            features: vec!["test.feature".into()],
+            source: "fixture".into(),
+        };
+        let lua = Lua::new();
+        for room in [None, Some("Кухня".to_owned())] {
+            let metadata = DeviceMetadata {
+                profile: profile.clone(),
+                room: room.clone(),
+            };
+            let json = serde_json::to_value(metadata).unwrap();
+            assert_eq!(json["model"], "fixture");
+            assert_eq!(json["features"][0], "test.feature");
+            assert_eq!(json["room"], serde_json::to_value(&room).unwrap());
+            let table =
+                lua_device_metadata(&lua, profile.clone(), 0, Room { room: room.clone() }).unwrap();
+            assert_eq!(table.get::<Option<String>>("room").unwrap(), room);
+            assert_eq!(table.get::<String>("model").unwrap(), "fixture");
+        }
+        assert!(serde_json::to_value(profile).unwrap().get("room").is_none());
+    }
 
     #[test]
     fn ipc_decodes_speech_and_alarm() {

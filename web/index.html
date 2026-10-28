@@ -18,6 +18,12 @@
   <h1>YAM</h1>
   <p id="device"></p>
   <section>
+    <h2>Комната</h2>
+    <label>Название <input id="room" placeholder="Например, Кухня"></label>
+    <button onclick="saveRoom()">Сохранить комнату</button>
+    <small>Пустое поле убирает метку. Модель и работающие плагины не меняются.</small>
+  </section>
+  <section>
     <h2>Пакеты</h2>
     <form id="upload"><input id="package-file" type="file" name="package" accept=".yap" required><button>Установить .yap</button><small id="upload-status"></small></form>
     <div id="plugins"></div>
@@ -39,6 +45,7 @@
 <script>
 const api = '/api';
 const deviceElement = document.getElementById('device');
+const roomInput = document.getElementById('room');
 const pluginsElement = document.getElementById('plugins');
 const uploadForm = document.getElementById('upload');
 const packageFile = document.getElementById('package-file');
@@ -70,6 +77,7 @@ async function load() {
   try {
     const [pluginData, settings, currentDevice] = await Promise.all([request('/plugins').then(r => r.json()), request('/settings').then(r => r.json()), request('/device').then(r => r.json())]);
     deviceElement.textContent = `Колонка: ${currentDevice.model} · ${currentDevice.architecture} · ${currentDevice.features.join(', ')}`;
+    roomInput.value = currentDevice.room ?? '';
     pluginsElement.innerHTML = pluginData.map(pluginRow).join('') || 'Пакетов нет';
     profileInput.value = settings.led.profile;
     countInput.value = settings.led.count;
@@ -98,6 +106,9 @@ function syncCount() {
 }
 async function saveSettings() {
   try { syncCount(); const settings = await request('/settings').then(r => r.json()); settings.led.profile = profileInput.value; settings.led.count = Number(countInput.value); settings.allow_plugin_binaries = binariesInput.checked; settings.updates = { ...(settings.updates || {}), enabled: updatesInput.checked }; await request('/settings', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(settings) }); } catch (error) { alert(error.message); }
+}
+async function saveRoom() {
+  try { await request('/room', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ room: roomInput.value }) }); await load(); } catch (error) { alert(error.message); }
 }
 load();
 </script>
