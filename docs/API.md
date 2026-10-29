@@ -499,12 +499,19 @@ curl -X POST "$BASE/plugins/example.plugin/invoke" \
 X-Luna-Token: TOKEN
 ```
 
+Для уже установленных legacy-пакетов принимается и старый заголовок
+`X-YAM-Token` с тем же значением; если переданы оба заголовка с разными
+значениями, запрос отклоняется.
+
 Доступ дополнительно проверяется permission-ами manifest пакета.
 
 | Метод | Endpoint | Permission |
 |---|---|---|
 | `GET` | `/api/runtime/:id/device` | `exec` |
 | `GET` | `/api/runtime/:id/sensors` | `sensors` |
+| `GET` | `/api/runtime/:id/media` | `exec` |
+| `POST` | `/api/runtime/:id/speech/next` | `ipc.speech` |
+| `POST` | `/api/runtime/:id/command/cancel` | `commands` + `ipc.speech` |
 | `POST` | `/api/runtime/:id/led` | `led` |
 | `POST` | `/api/runtime/:id/led/ring` | `led` |
 | `POST` | `/api/runtime/:id/led/logo` | `led` |
@@ -515,6 +522,13 @@ X-Luna-Token: TOKEN
 | `POST` | `/api/runtime/:id/clock/off` | `clock` |
 
 Runtime LED и clock используют те же JSON-тела, что и основные endpoints.
+
+`/media` возвращает доступные пакету возможности (`speech`, `commands`, `led`)
+и `led_count`. `/speech/next` отдаёт следующее состояние Alice (`phase`,
+`request_id`, `transcript`, `final`, `initial_snapshot`) или `null` по
+таймауту; параллельный опрос того же пакета отклоняется. `/command/cancel`
+отменяет ответ Alice только для финальной фразы, объявленной в
+`[commands].phrases`, в пределах короткого окна после распознавания.
 
 ## Lua capability checks
 

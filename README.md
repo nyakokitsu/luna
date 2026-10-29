@@ -209,6 +209,13 @@ rustup target add armv7-unknown-linux-musleabihf
 cargo test --workspace --locked
 ```
 
+Изолированная проверка media/speech моста (python3 и собранный бинарник;
+колонка, звук и LED не используются):
+
+```sh
+python3 tests/media_api.py target/debug/luna
+```
+
 ## Разработка станции
 
 1. Создайте `stations/<device>/`.

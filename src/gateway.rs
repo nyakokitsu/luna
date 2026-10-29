@@ -32,6 +32,9 @@ use uuid::Uuid;
 
 use crate::rooms::Room;
 
+#[path = "media.rs"]
+mod media;
+
 #[derive(Parser)]
 struct Args {
     #[arg(long, default_value = "127.0.0.1:8099")]
@@ -523,6 +526,9 @@ struct App {
     clock: Option<Arc<dyn ClockBackend>>,
     plugins: Arc<Mutex<PluginManager>>,
     runtime_tokens: Arc<Mutex<HashMap<String, String>>>,
+    speech_readers:
+        Arc<Mutex<HashMap<String, (String, Arc<std::sync::Mutex<media::SpeechReader>>)>>>,
+    speech_claims: Arc<Mutex<HashMap<String, (String, String, String, Instant, bool)>>>,
     runtime_api_url: String,
     input_actions: &'static [InputAction],
     input_gestures: &'static [InputGesture],
@@ -1784,8 +1790,8 @@ fn validate_command_policy(m: &Manifest) -> Result<()> {
     if !has_commands {
         bail!("[commands].phrases requires the commands permission")
     }
-    if m.commands.phrases.len() > 32 {
-        bail!("[commands].phrases lists more than 32 phrases")
+    if m.commands.phrases.len() > 8192 {
+        bail!("[commands].phrases lists more than 8192 phrases")
     }
     for phrase in &m.commands.phrases {
         if phrase.len() > 128 || normalize_command(phrase).is_empty() {
@@ -3406,6 +3412,7 @@ async fn run_binary(
         (manifest, location.root, plugins.state_root(&id))
     };
     let token = Uuid::new_v4().to_string();
+    let invocation_token = token.clone();
     app.runtime_tokens
         .lock()
         .await
@@ -3438,8 +3445,12 @@ async fn run_binary(
             .args(invocation_args)
             .current_dir(&root)
             .env("LD_LIBRARY_PATH", binary_library_path(&manifest, &root))
-            .env("LUNA_API_URL", api_url)
-            .env("LUNA_API_TOKEN", token)
+            .env("LUNA_API_URL", &api_url)
+            .env("LUNA_API_TOKEN", &token)
+            // Transitional aliases for already installed legacy binary plugins.
+            // Both names refer to this exact invocation, not a second token.
+            .env("YAM_API_URL", api_url)
+            .env("YAM_API_TOKEN", token)
             .env("LUNA_PLUGIN_ID", task_id)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -3469,7 +3480,21 @@ async fn run_binary(
         }
     })
     .await?;
-    app.runtime_tokens.lock().await.remove(&id);
+    // An older invocation may finish after its replacement starts. It must
+    // never revoke the new invocation's token or speech reader/claims.
+    let revoke = {
+        let mut tokens = app.runtime_tokens.lock().await;
+        if tokens.get(&id) == Some(&invocation_token) {
+            tokens.remove(&id);
+            true
+        } else {
+            false
+        }
+    };
+    if revoke {
+        app.speech_readers.lock().await.remove(&id);
+        app.speech_claims.lock().await.remove(&id);
+    }
     result
 }
 
@@ -4015,6 +4040,7 @@ async fn disable_service(
     State(a): State<App>,
     AxumPath(id): AxumPath<String>,
 ) -> Result<StatusCode, ApiError> {
+    let revoked = a.runtime_tokens.lock().await.get(&id).cloned();
     let mut plugins = a.plugins.lock().await;
     plugins.manifest(&id)?;
     plugins.service_enabled.remove(&id);
@@ -4022,14 +4048,23 @@ async fn disable_service(
         token.store(true, Ordering::Relaxed);
     }
     plugins.save()?;
+    drop(plugins);
+    if let Some(token) = revoked {
+        revoke_runtime(&a, &id, &token).await;
+    }
     Ok(StatusCode::OK)
 }
 async fn stop_plugin(
     State(a): State<App>,
     AxumPath(id): AxumPath<String>,
 ) -> Result<StatusCode, ApiError> {
+    let revoked = a.runtime_tokens.lock().await.get(&id).cloned();
     let mut plugins = a.plugins.lock().await;
     let Some(token) = plugins.running.remove(&id) else {
+        drop(plugins);
+        if let Some(token) = revoked {
+            revoke_runtime(&a, &id, &token).await;
+        }
         return Ok(StatusCode::OK);
     };
     token.store(true, Ordering::Relaxed);
@@ -4039,6 +4074,9 @@ async fn stop_plugin(
         .iter()
         .any(|p| p == "led");
     drop(plugins);
+    if let Some(token) = revoked {
+        revoke_runtime(&a, &id, &token).await;
+    }
     if uses_led {
         let _ = a.led.off().await;
     }
@@ -4052,6 +4090,35 @@ async fn package_logs(
     let path = a.plugins.lock().await.state_root(&id).join("runtime.log");
     Ok(fs::read_to_string(path).unwrap_or_default())
 }
+async fn revoke_runtime(app: &App, id: &str, expected: &str) {
+    let revoke = {
+        let mut tokens = app.runtime_tokens.lock().await;
+        if tokens.get(id).map(String::as_str) == Some(expected) {
+            tokens.remove(id);
+            true
+        } else {
+            false
+        }
+    };
+    if revoke {
+        app.speech_readers.lock().await.remove(id);
+        app.speech_claims.lock().await.remove(id);
+    }
+}
+
+fn runtime_token(headers: &HeaderMap) -> Result<&str> {
+    let luna = headers.get("x-luna-token");
+    let legacy = headers.get("x-yam-token");
+    if let (Some(a), Some(b)) = (luna, legacy) {
+        if a != b {
+            bail!("conflicting runtime authentication headers")
+        }
+    }
+    luna.or(legacy)
+        .and_then(|value| value.to_str().ok())
+        .context("missing runtime token")
+}
+
 async fn runtime_permission(
     app: &App,
     id: &str,
@@ -4059,10 +4126,7 @@ async fn runtime_permission(
     permission: &str,
 ) -> Result<(), ApiError> {
     validate_id(id)?;
-    let token = headers
-        .get("x-luna-token")
-        .and_then(|value| value.to_str().ok())
-        .context("missing X-Luna-Token")?;
+    let token = runtime_token(headers)?;
     if app.runtime_tokens.lock().await.get(id).map(String::as_str) != Some(token) {
         return Err(ApiError(anyhow!("invalid runtime token")));
     }
@@ -4694,6 +4758,8 @@ pub async fn run_with_station(station: Option<StationSpec>) -> Result<()> {
             yam_run,
         )?)),
         runtime_tokens: Arc::new(Mutex::new(HashMap::new())),
+        speech_readers: Arc::new(Mutex::new(HashMap::new())),
+        speech_claims: Arc::new(Mutex::new(HashMap::new())),
         runtime_api_url: crate::updater::runtime_api_url(&args.listen)?,
         input_actions: station.map(|spec| spec.input_actions).unwrap_or(&[]),
         input_gestures: station.map(|spec| spec.input_gestures).unwrap_or(&[]),
@@ -4795,6 +4861,9 @@ pub async fn run_with_station(station: Option<StationSpec>) -> Result<()> {
             .route("/api/lua/run", post(run_lua_file))
             .route("/api/lua/:id/stop", post(stop_lua_file))
             .route("/api/runtime/:id/device", get(runtime_device))
+            .route("/api/runtime/:id/media", get(media::capabilities))
+            .route("/api/runtime/:id/speech/next", post(media::speech))
+            .route("/api/runtime/:id/command/cancel", post(media::cancel_command))
             .route("/api/runtime/:id/sensors", get(runtime_sensors))
             .route("/api/runtime/:id/led", post(runtime_led))
             .route("/api/runtime/:id/led/ring", post(runtime_led_ring))
@@ -4890,6 +4959,36 @@ mod tests {
         assert!(command_matches("ананас", "Алиса, ананас!"));
         assert!(command_matches("ананас", "ананас"));
         assert!(!command_matches("ананас", "алиса банан"));
+    }
+
+    fn manifest_with_phrases(count: usize) -> Manifest {
+        let phrases = (0..count)
+            .map(|index| format!("\"фраза {index}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        toml::from_str(&format!(
+            "id = \"x\"\nname = \"x\"\nversion = \"1\"\nentry = \"x\"\n\
+             permissions = [\"commands\"]\n[commands]\nphrases = [{phrases}]\n"
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn command_phrase_limit_covers_the_full_transport_dictionary() {
+        assert!(validate_command_policy(&manifest_with_phrases(3732)).is_ok());
+        assert!(validate_command_policy(&manifest_with_phrases(8192)).is_ok());
+        assert!(validate_command_policy(&manifest_with_phrases(8193)).is_err());
+    }
+
+    #[test]
+    fn runtime_token_accepts_legacy_header_but_not_conflicting_pair() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-yam-token", "same".parse().unwrap());
+        assert_eq!(runtime_token(&headers).unwrap(), "same");
+        headers.insert("x-luna-token", "same".parse().unwrap());
+        assert_eq!(runtime_token(&headers).unwrap(), "same");
+        headers.insert("x-luna-token", "other".parse().unwrap());
+        assert!(runtime_token(&headers).is_err());
     }
 
     #[test]
