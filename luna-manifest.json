@@ -61,6 +61,16 @@
       "binary": "luna-yandexplum",
       "asset": "luna-yandexplum-aarch64-linux-musl",
       "target": "aarch64-unknown-linux-musl"
+    },
+    {
+      "device": "yandexstation_2",
+      "codename": "station2",
+      "yam_target": "yandexstation_2",
+      "manifest_path": "stations/yandexstation_2/Cargo.toml",
+      "models": ["yandexstation_2", "yandexstation2", "yandex-station-2"],
+      "binary": "luna-yandexstation_2",
+      "asset": "luna-yandexstation_2-aarch64-linux-musl",
+      "target": "aarch64-unknown-linux-musl"
     }
   ]
 }
