@@ -820,6 +820,38 @@ curl -X POST "$BASE/plugins/example.plugin/invoke" \
 
 ## Runtime API для плагинов
 
+### Разрешение binary-зависимости YAM
+
+`GET /api/runtime/:id/dependencies/:alias` требует `exec`, валидный invocation
+token и **активный YAM binary-плагин** (с lifetime lease). Local `.yap` и Lua
+не используют этот endpoint: без lease возвращённый путь мог бы быть удалён
+транзакцией ещё до вызова. Alias объявляется в runtime descriptor caller:
+
+```toml
+[dependencies]
+station-volume = "station.volume"
+```
+
+Это runtime allowlist, не замена `depends` в исходном `yam.yaml`. Допускается
+до16 alias; target — строго `namespace.name`. Provider должен быть включён,
+совместим с устройством и объявлять binary oneshot с `exec`. Его descriptor,
+launcher и library paths проверяются в выбранной версии по тем же правилам.
+
+Ответ содержит `plugin_id`, `version`, `directory`, `program`, `interpreter`
+(строка `sh` или null), `args` и `library_path`. Все пути — pinned payload.
+Host **не выполняет** команду и не выдаёт caller токен provider: caller с уже
+разрешённым `exec` вызывает launcher сам, аргументами процесса, с собственным
+таймаутом/лимитом вывода. API не раскрывает произвольный не объявленный пакет.
+Резолвить перед каждым вызовом: отключение provider должно сразу запрещать
+новые операции. Проверка firmware `check-write` остаётся в station-volume,
+не в Luna. Для обновления YAM по-прежнему требуется остановить все leased
+binary-плагины. Не кэшировать launcher между invocation/версиями.
+
+Пакет `yam/luna` объявляет virtual capability `luna-binary-dependencies-v1`;
+v2-пакет может требовать её в `depends`, чтобы один номер0.2.7 не был ошибочно
+принят за наличие нового API. Registry должен публиковать соответствующий
+`provides`; добавление поля в исходники не означает, что такой артефакт уже выпущен.
+
 Пути runtime привязаны к установленному пакету:
 
 ```text

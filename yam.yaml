@@ -2,6 +2,7 @@ name: yam/luna
 version: 0.2.7
 license: MIT
 description: Luna host runtime for Lua, Quasar and legacy plugins
+provides: [luna-yam-binary-host, luna-binary-dependencies-v1]
 targets: [yandexmini, yandexmicro, yandexmini_2, yandexmini3, yandexmidi, yandexplum, yandexstation_2]
 files:
   bin/luna: target/$YAM_TRIPLE/release/luna

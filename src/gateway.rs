@@ -40,6 +40,8 @@ mod media;
 mod providers;
 #[path = "yam_binary.rs"]
 mod yam_binary;
+#[path = "dependencies.rs"]
+mod dependencies;
 
 #[derive(Parser)]
 struct Args {
@@ -335,6 +337,9 @@ impl Default for Settings {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Manifest {
+    /// Runtime aliases, not a substitute for YAM package-level depends.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    dependencies: BTreeMap<String, String>,
     #[serde(default)]
     media_provider: Option<providers::Declaration>,
     id: String,
@@ -4400,6 +4405,7 @@ async fn run_lua_file(
         fs::copy(entry.path(), destination)?;
     }
     let manifest = Manifest {
+        dependencies: BTreeMap::new(),
         media_provider: None,
         id: id.clone(),
         name: format!("User Lua: {}", request.file),
@@ -5768,6 +5774,7 @@ pub async fn run_with_station(station: Option<StationSpec>) -> Result<()> {
             .route("/api/lua/run", post(run_lua_file))
             .route("/api/lua/:id/stop", post(stop_lua_file))
             .route("/api/runtime/:id/device", get(runtime_device))
+            .route("/api/runtime/:id/dependencies/:alias", get(dependencies::resolve))
             .route("/api/media", get(providers::status))
             .route("/api/media/select", post(providers::select))
             .route("/api/media/command", post(providers::transport))
@@ -6310,6 +6317,54 @@ mod lifecycle_tests {
         }).await.unwrap();
         assert!(yam_exclusive_available(&run));
         assert!(app.runtime_tokens.lock().await.get("example.worker").is_none());
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn yam_dependency_resolution_is_declared_enabled_compatible_and_nonexecuting() {
+        use std::os::unix::fs::symlink;
+        let (app, state, run) = yam_binary_fixture().await;
+        let caller = app.root.join("yam/pkgs/example/worker/1.0.0/share/luna/plugins/example.worker/plugin.toml");
+        let mut text = fs::read_to_string(&caller).unwrap();
+        text.push_str("\n[dependencies]\nstation-volume='station.volume'\n");
+        fs::write(&caller, text).unwrap();
+        let selected = app.root.join("yam/pkgs/station/volume/1.0.2");
+        let root = selected.join("share/luna/plugins/station.volume");
+        let shared = app.root.join("yam/share/luna/plugins/station.volume");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&shared).unwrap();
+        symlink("1.0.2", selected.parent().unwrap().join("current")).unwrap();
+        let descriptor = "id='station.volume'\nname='Volume'\nversion='1.0.2'\nentry='station-volume.sh'\npermissions=['exec']\n[launch]\nkind='binary'\ninterpreter='sh'\n";
+        fs::write(root.join("plugin.toml"), descriptor).unwrap();
+        fs::write(root.join("station-volume.sh"), "touch unexpectedly-executed\n").unwrap();
+        symlink(root.join("plugin.toml"), shared.join("plugin.toml")).unwrap();
+        app.plugins.lock().await.enabled.insert("station.volume".into());
+        start_package(app.clone(), "example.worker".into(), vec![]).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !state.join("ready").exists() { tokio::time::sleep(Duration::from_millis(10)).await; }
+        }).await.unwrap();
+        let token = app.runtime_tokens.lock().await.get("example.worker").unwrap().clone();
+        let mut headers = HeaderMap::new();
+        headers.insert("x-luna-token", token.parse().unwrap());
+        let resolve = |alias: &str| dependencies::resolve(State(app.clone()), AxumPath(("example.worker".into(), alias.into())), headers.clone());
+        assert!(resolve("undeclared").await.is_err());
+        let Json(launcher) = resolve("station-volume").await.unwrap();
+        assert_eq!(launcher.plugin_id, "station.volume");
+        assert_eq!(launcher.program, root.join("station-volume.sh"));
+        assert_eq!(launcher.interpreter.as_deref(), Some("sh"));
+        assert!(!root.join("unexpectedly-executed").exists());
+        assert!(!yam_exclusive_available(&run));
+        app.plugins.lock().await.enabled.remove("station.volume");
+        assert!(resolve("station-volume").await.is_err());
+        app.plugins.lock().await.enabled.insert("station.volume".into());
+        fs::write(root.join("plugin.toml"), format!("{descriptor}\n[compatibility]\nmodels=['not-this-device']\n")).unwrap();
+        assert!(resolve("station-volume").await.is_err());
+        fs::write(root.join("plugin.toml"), format!("{descriptor}mode='service'\n")).unwrap();
+        assert!(resolve("station-volume").await.is_err());
+        fs::write(root.join("plugin.toml"), descriptor).unwrap();
+        stop_plugin(State(app.clone()), AxumPath("example.worker".into())).await.unwrap();
+        assert!(resolve("station-volume").await.is_err());
+        assert!(yam_exclusive_available(&run));
         fs::remove_dir_all(&app.root).unwrap();
     }
 
