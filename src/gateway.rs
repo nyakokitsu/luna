@@ -4900,11 +4900,54 @@ pub async fn run_with_station(station: Option<StationSpec>) -> Result<()> {
     let router = router
         .layer(DefaultBodyLimit::max(67 * 1024 * 1024))
         .layer(TraceLayer::new_for_http())
-        .with_state(app);
+        .with_state(app.clone());
     let l = TcpListener::bind(&args.listen).await?;
     tracing::info!("web UI: http://{}", args.listen);
-    axum::serve(l, router).await?;
+    axum::serve(l, router)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
+    stop_all_packages(&app).await;
     Ok(())
+}
+
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut terminate = signal(SignalKind::terminate()).expect("install SIGTERM handler");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = terminate.recv() => {}
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
+}
+
+/// Stop every running package before exiting. Without this the services outlive
+/// the supervisor, keep their locks and ports, and the next start fails until a
+/// reboot. Each token is flipped; the package runner then terminates the whole
+/// process group.
+async fn stop_all_packages(app: &App) {
+    let tokens = {
+        let plugins = app.plugins.lock().await;
+        plugins.running.values().cloned().collect::<Vec<_>>()
+    };
+    if tokens.is_empty() {
+        return;
+    }
+    for token in &tokens {
+        token.store(true, Ordering::Relaxed);
+    }
+    for _ in 0..60 {
+        if app.plugins.lock().await.running.is_empty() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    tracing::warn!("packages did not stop before exit");
 }
 const UI: &str = include_str!("../web/index.html");
 
