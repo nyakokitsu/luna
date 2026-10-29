@@ -349,19 +349,13 @@ cargo build --release --locked \
   --bin luna-yandexnew
 ~~~
 
-Все станции:
+Для сборки и установки выбранной станции используйте публичный helper:
 
 ~~~sh
-tools/build-stations.sh
+tools/build-deploy.sh --device yandexnew
 ~~~
 
-Одна запись manifest:
-
-~~~sh
-tools/build-stations.sh luna-manifest.json dist yandexnew
-~~~
-
-Скрипт использует target из luna-manifest.json и не угадывает ABI по имени.
+Helper использует target из luna-manifest.json и не угадывает ABI по имени.
 Если target или linker отсутствует, исправьте toolchain, а не заменяйте ABI
 на ближайший.
 

@@ -1,7 +1,6 @@
 /target/
 /dist/
 
-# Local deployment/release helpers; do not publish these scripts.
-/tools/build-deploy.sh
+# Local release helper; do not publish it.
 /tools/release.sh
 /.luna-last-release

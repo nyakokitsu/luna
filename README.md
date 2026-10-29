@@ -122,7 +122,13 @@ Luna. Она открывается по `/web/<plugin-id>` и может выз
 
 ```sh
 cargo test --workspace --locked
-tools/build-stations.sh
+```
+
+Для сборки и установки на подключённую станцию используйте единственный
+публичный helper:
+
+```sh
+tools/build-deploy.sh --device yandexmini3
 ```
 
 Для новой станции создаётся `stations/<device>/` со своими `device.rs`,
