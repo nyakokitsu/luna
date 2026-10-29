@@ -128,9 +128,3 @@ tools/build-stations.sh
 Для новой станции создаётся `stations/<device>/` со своими `device.rs`,
 `station_main.rs` и hardware/capability-модулями. Общий gateway должен
 оставаться независимым от конкретных sysfs-путей и I²C-адресов.
-
-Релиз всех станций:
-
-```sh
-tools/release.sh --update
-```
