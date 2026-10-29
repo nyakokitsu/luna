@@ -855,6 +855,12 @@ struct PluginLocation {
     source: PluginSource,
     package: Option<String>,
 }
+/// Directories directly under the plugins root are local packages, except
+/// Luna's own state directory and ephemeral user Lua entries.
+fn is_local_package_dir(name: &std::ffi::OsStr) -> bool {
+    let name = name.to_string_lossy();
+    name != "plugin-state" && !name.starts_with("user_lua_")
+}
 impl PluginManager {
     fn new(root: PathBuf, yam_root: Option<PathBuf>, yam_run: Option<PathBuf>) -> Result<Self> {
         fs::create_dir_all(&root)?;
@@ -977,7 +983,7 @@ impl PluginManager {
             let mut locations = Vec::new();
             for e in fs::read_dir(&self.root)? {
                 let e = e?;
-                if e.file_type()?.is_dir() && !e.file_name().to_string_lossy().starts_with("user_lua_") {
+                if e.file_type()?.is_dir() && is_local_package_dir(&e.file_name()) {
                     locations.push(PluginLocation { root: e.path(), source: PluginSource::Local, package: None });
                 }
             }
@@ -5139,5 +5145,14 @@ mod tests {
             root.join("data/plugins/plugin-state/vasya.clock")
         );
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn local_scan_skips_state_and_user_lua_directories() {
+        let dir = std::ffi::OsStr::new;
+        assert!(is_local_package_dir(dir("station-airplay")));
+        assert!(is_local_package_dir(dir("vasya.clock")));
+        assert!(!is_local_package_dir(dir("plugin-state")));
+        assert!(!is_local_package_dir(dir("user_lua_1")));
     }
 }
