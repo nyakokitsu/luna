@@ -20,6 +20,7 @@ station crate → конкретное железо станции
 ## Документация
 
 - [Гайд: как строить пакет на Luna](docs/PACKAGE_GUIDE.md)
+- [Гайд: как добавить новую станцию](docs/DEVICE_GUIDE.md)
 - [Полный HTTP API](docs/API.md)
 - [Плагины через YAM](docs/PLUGINS.md)
 - [Manifest поддерживаемых станций](luna-manifest.json)
