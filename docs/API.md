@@ -775,6 +775,64 @@ curl "$BASE/plugins"
 удаления Luna для них недоступна, удаление выполняется командой
 `yam remove namespace/name`.
 
+#### Binary-плагины из YAM v2
+
+YAM устанавливает и связывает файлы; Luna запускает binary-плагин своим
+обычным supervisor и выдаёт ему runtime token. Это не реализация `yam service
+start`: в YAM v2 supervisor остаётся отдельной задачей.
+
+Требования:
+
+- `allow_plugin_binaries=true` в Luna и явно включённый в Luna plugin ID.
+- `--yam-root`/`YAM_ROOT` и **обязательно** `--yam-run`/`YAM_RUN`, указывающий
+  на настоящий run-каталог YAM с существующим `yam.lock`.
+- Descriptor в `$YAM_ROOT/share/luna/plugins/namespace.name/plugin.toml`,
+  `id='namespace.name'`; выбранная версия —
+  `$YAM_ROOT/pkgs/namespace/name/current`.
+- Descriptor обязан ссылаться на `share/luna/plugins/namespace.name/plugin.toml`
+  внутри выбранной версии. Launcher и явно указанные `library_paths` не могут
+  выходить за её plugin-подкаталог. Permissions и IPC/input/command policy
+  проверяются до запуска; допустимый interpreter — только `sh`.
+
+Например, runtime-specific descriptor внутри v2 payload:
+
+```toml
+id = "example.worker"
+name = "Worker"
+version = "1.0.0"
+entry = "bin/worker"
+permissions = ["exec"]
+[launch]
+kind = "binary"
+mode = "service"
+# library_paths = ["lib"] # только если такая приватная директория есть
+```
+
+Запуск использует immutable plugin-подкаталог выбранной версии как cwd,
+не mutable ссылки общего дерева. У YAM binary-плагинов не угадываются старые
+apkg-runner/библиотеки; `LD_LIBRARY_PATH` содержит только явно объявленные
+приватные директории, не окружение другой установки.
+
+На **всё время выполнения, включая завершение process group**, Luna держит
+shared flock на `yam.lock`. Поэтому установка/удаление/repair YAM с exclusive
+lock будут отклонены, пока такие плагины работают. Это грубая, но безопасная
+граница текущей интеграции: перед любой транзакцией YAM остановите **все**
+YAM binary-плагины в Luna, дождитесь завершения, выполните транзакцию и
+возобновите нужные плагины. Автоматической orchestration обновлений здесь нет.
+
+Запуск при активной транзакции YAM завершается ошибкой и не ждёт её внутри
+async runtime. Отсутствующий lock не создаётся и не обходится. Lua-плагины и
+локальные `.yap` сохраняют прежний lifecycle.
+
+Runtime URL использует полный `namespace.name`; token и permissions остаются
+привязанными только к этому ID. Логи/state расположены в Luna data-dir:
+`plugins/plugin-state/namespace.name/`. Его абсолютный путь передаётся binary
+как `LUNA_PLUGIN_STATE`; mutable данные следует писать туда, а не в payload.
+
+Формат `.yampkg` и его `MANIFEST.yaml` по-прежнему проверяет YAM; Luna не
+заменяет подпись реестра или БД ownership своим descriptor. Descriptor — лишь
+runtime-метаданные внутри уже установленного пакета. Это не OS sandbox.
+
 ### `GET /api/plugins/sources`
 
 Показывает обнаруженные каталоги Luna и YAM:
