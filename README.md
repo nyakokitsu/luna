@@ -112,7 +112,7 @@ Luna. Она открывается по `/web/<plugin-id>` и может выз
 | Device | Codename | Target |
 | --- | --- | --- |
 | `yandexmini3` | `bergamot` | `aarch64-unknown-linux-musl` |
-| `yandexmini` | `mango` | `armv7-unknown-linux-musleabihf` |
+| `yandexmini` | `yandexmini` | `armv7-unknown-linux-musleabihf` |
 | `yandexmicro` | `yandexmicro` | `aarch64-unknown-linux-musl` |
 | `yandexmini_2` | `yandexmini_2` | `aarch64-unknown-linux-musl` |
 | `yandexmidi` | `cucumber` | `aarch64-unknown-linux-musl` |
