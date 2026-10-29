@@ -69,6 +69,7 @@ pub(super) fn pinned_root(yam: &Path, shared: &Path, manifest: &Manifest) -> Res
 }
 
 fn validate_policy(manifest: &Manifest) -> Result<()> {
+    dependencies::validate_policy(manifest)?;
     if manifest.launch.kind != LaunchKind::Binary {
         bail!("YAM binary launcher requires launch.kind=binary")
     }
