@@ -38,6 +38,8 @@ use crate::rooms::Room;
 mod media;
 #[path = "providers.rs"]
 mod providers;
+#[path = "yam_binary.rs"]
+mod yam_binary;
 
 #[derive(Parser)]
 struct Args {
@@ -1262,7 +1264,12 @@ impl PluginManager {
                 }
                 let reason = compatibility_error(&manifest, device);
                 let reason = if location.source == PluginSource::Yam && manifest.launch.kind == LaunchKind::Binary {
-                    Some("binary-плагины из YAM пока не поддерживаются".into())
+                    if self.yam_run.is_none() {
+                        Some("YAM binary plugins require --yam-run or YAM_RUN".into())
+                    } else {
+                        yam_binary::pinned_root(self.yam_root.as_ref().unwrap(), &location.root, &manifest)
+                            .err().map(|error| error.to_string()).or(reason)
+                    }
                 } else { reason };
                 out.push(PluginInfo {
                     directory: location.root,
@@ -3963,27 +3970,43 @@ async fn run_binary(
     cancelled: Arc<AtomicBool>,
 ) -> Result<()> {
     let device = app.device.lock().await.clone();
-    let (manifest, root, state_root) = {
+    let (location, local_manifest, state_root, yam_root, yam_run) = {
         let plugins = app.plugins.lock().await;
         if !plugins.enabled.contains(&id) {
             bail!("package is disabled")
         }
-        let (location, manifest) = plugins.location_and_manifest(&id)?;
-        if location.source == PluginSource::Yam {
-            bail!("binary-плагины из YAM пока не поддерживаются")
-        }
-        if let Some(reason) = compatibility_error(&manifest, &device) {
-            bail!("package is incompatible: {reason}")
-        }
-        if !manifest
-            .permissions
-            .iter()
-            .any(|permission| permission == "exec")
-        {
-            bail!("binary packages require the exec permission")
-        }
-        (manifest, location.root, plugins.state_root(&id))
+        let location = plugins.location(&id)?;
+        let local_manifest = if location.source == PluginSource::Local {
+            Some(plugins.manifest(&id)?)
+        } else {
+            None
+        };
+        (location, local_manifest, plugins.state_root(&id), plugins.yam_root.clone(), plugins.yam_run.clone())
     };
+    let requested_id = id.clone();
+    let prepared = if let Some(manifest) = local_manifest {
+        yam_binary::Prepared { manifest, root: location.root, lease: None }
+    } else {
+        task::spawn_blocking(move || {
+            yam_binary::prepare(&requested_id, location, yam_root.as_deref(), yam_run.as_deref())
+        }).await??
+    };
+    let yam_binary::Prepared { manifest, root, lease } = prepared;
+    if cancelled.load(Ordering::Relaxed) {
+        return Ok(());
+    }
+    if !app.plugins.lock().await.enabled.contains(&id) {
+        bail!("package is disabled")
+    }
+    if !app.settings.lock().await.allow_plugin_binaries {
+        bail!("binary execution disabled by administrator")
+    }
+    if let Some(reason) = compatibility_error(&manifest, &device) {
+        bail!("package is incompatible: {reason}")
+    }
+    if !manifest.permissions.iter().any(|permission| permission == "exec") {
+        bail!("binary packages require the exec permission")
+    }
     let token = Uuid::new_v4().to_string();
     let invocation_token = token.clone();
     app.runtime_tokens
@@ -3993,13 +4016,27 @@ async fn run_binary(
     let api_url = format!("{}/api/runtime/{id}", app.runtime_api_url);
     let task_id = id.clone();
     let result = task::spawn_blocking(move || -> Result<()> {
+        // Keep the selected package version alive through process-group cleanup.
+        let _yam_lease = lease;
+        if cancelled.load(Ordering::Relaxed) {
+            return Ok(());
+        }
         let executable = manifest.launch.path(&manifest).to_string();
         safe_relative(&executable)?;
         fs::create_dir_all(&state_root)?;
         let log = Arc::new(std::sync::Mutex::new(RotatingLog::open(
             state_root.join("runtime.log"),
         )?));
-        let (interpreter, program) = launch_program(&manifest, &root, &executable);
+        let (interpreter, program) = if _yam_lease.is_some() {
+            (manifest.launch.interpreter.as_ref().map(|_| "sh"), root.join(&executable))
+        } else {
+            launch_program(&manifest, &root, &executable)
+        };
+        let library_path = if _yam_lease.is_some() {
+            yam_binary::library_path(&manifest, &root)
+        } else {
+            binary_library_path(&manifest, &root)
+        };
         let mut command = match interpreter {
             Some(interpreter) => {
                 let mut command = Command::new(interpreter);
@@ -4017,10 +4054,11 @@ async fn run_binary(
             .args(&manifest.launch.args)
             .args(invocation_args)
             .current_dir(&root)
-            .env("LD_LIBRARY_PATH", binary_library_path(&manifest, &root))
+            .env("LD_LIBRARY_PATH", library_path)
             .env("LUNA_API_URL", api_url)
             .env("LUNA_API_TOKEN", token)
             .env("LUNA_PLUGIN_ID", task_id)
+            .env("LUNA_PLUGIN_STATE", &state_root)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()?;
@@ -4717,7 +4755,7 @@ async fn package_logs(
     State(a): State<App>,
     AxumPath(id): AxumPath<String>,
 ) -> Result<String, ApiError> {
-    validate_id(&id)?;
+    validate_id_or_yam(&id)?;
     let path = a.plugins.lock().await.state_root(&id).join("runtime.log");
     Ok(fs::read_to_string(path).unwrap_or_default())
 }
@@ -4733,7 +4771,7 @@ async fn runtime_permission(
     headers: &HeaderMap,
     permission: &str,
 ) -> Result<(), ApiError> {
-    validate_id(id)?;
+    validate_id_or_yam(id)?;
     let token = runtime_token(headers)?;
     if app.runtime_tokens.lock().await.get(id).map(String::as_str) != Some(token) {
         return Err(ApiError(anyhow!("invalid runtime token")));
@@ -6179,6 +6217,99 @@ mod lifecycle_tests {
         tokio::time::sleep(Duration::from_millis(100)).await;
         stop_plugin(State(app.clone()), AxumPath("test-service".into())).await.unwrap();
         assert!(!package.join("overlap").exists(), "concurrent replacements overlapped");
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    async fn yam_binary_fixture() -> (App, PathBuf, PathBuf) {
+        use std::os::unix::fs::symlink;
+        let (app, _) = fixture().await;
+        stop_plugin(State(app.clone()), AxumPath("test-service".into())).await.unwrap();
+        let yam = app.root.join("yam");
+        let run = app.root.join("yam-run");
+        let selected = yam.join("pkgs/example/worker/1.0.0");
+        let package = selected.join("share/luna/plugins/example.worker");
+        let shared = yam.join("share/luna/plugins/example.worker");
+        fs::create_dir_all(&package).unwrap();
+        fs::create_dir_all(&shared).unwrap();
+        fs::create_dir_all(&run).unwrap();
+        fs::write(run.join("yam.lock"), "").unwrap();
+        symlink("1.0.0", selected.parent().unwrap().join("current")).unwrap();
+        fs::write(package.join("plugin.toml"), "id='example.worker'\nname='Worker'\nversion='1.0.0'\nentry='run.sh'\npermissions=['exec']\n[launch]\nkind='binary'\ninterpreter='sh'\n").unwrap();
+        fs::write(package.join("run.sh"), "trap 'sleep 0.2; touch \"$LUNA_PLUGIN_STATE/cleaned\"; exit 0' TERM\npwd > \"$LUNA_PLUGIN_STATE/cwd\"\nprintf '%s' \"$LUNA_PLUGIN_ID\" > \"$LUNA_PLUGIN_STATE/id\"\ntouch \"$LUNA_PLUGIN_STATE/ready\"\nwhile :; do sleep 0.02; done\n").unwrap();
+        symlink(package.join("plugin.toml"), shared.join("plugin.toml")).unwrap();
+        // Execution uses the pinned package, not a common-tree executable link.
+        let state = app.plugins.lock().await.state_root("example.worker");
+        let mut manager = app.plugins.lock().await;
+        manager.yam_root = Some(yam);
+        manager.yam_run = Some(run.clone());
+        manager.enabled.insert("example.worker".into());
+        drop(manager);
+        (app, state, run)
+    }
+
+    fn yam_exclusive_available(run: &Path) -> bool {
+        use std::os::fd::AsRawFd;
+        let file = fs::File::open(run.join("yam.lock")).unwrap();
+        unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) == 0 }
+    }
+
+    #[tokio::test]
+    async fn yam_binary_lifecycle_pins_payload_and_authorizes_namespaced_runtime() {
+        let (app, state, run) = yam_binary_fixture().await;
+        let device = app.device.lock().await.clone();
+        let visible = app.plugins.lock().await.list(&device).unwrap();
+        let plugin = visible.iter().find(|p| p.manifest.id == "example.worker").unwrap();
+        assert!(plugin.compatible);
+        assert_eq!(plugin.source, PluginSource::Yam);
+        start_package(app.clone(), "example.worker".into(), vec![]).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !state.join("ready").exists() { tokio::time::sleep(Duration::from_millis(10)).await; }
+        }).await.unwrap();
+        assert!(!yam_exclusive_available(&run));
+        assert_eq!(fs::read_to_string(state.join("id")).unwrap(), "example.worker");
+        let cwd = fs::read_to_string(state.join("cwd")).unwrap();
+        assert!(cwd.trim().ends_with("pkgs/example/worker/1.0.0/share/luna/plugins/example.worker"));
+        let token = app.runtime_tokens.lock().await.get("example.worker").unwrap().clone();
+        let mut headers = HeaderMap::new();
+        headers.insert("x-luna-token", token.parse().unwrap());
+        runtime_permission(&app, "example.worker", &headers, "exec").await.unwrap();
+        assert!(runtime_permission(&app, "example.worker", &headers, "sensors").await.is_err());
+        assert!(runtime_permission(&app, "example.other", &headers, "exec").await.is_err());
+        stop_plugin(State(app.clone()), AxumPath("example.worker".into())).await.unwrap();
+        assert!(state.join("cleaned").exists());
+        assert!(yam_exclusive_available(&run));
+        assert!(runtime_permission(&app, "example.worker", &headers, "exec").await.is_err());
+        package_logs(State(app.clone()), AxumPath("example.worker".into())).await.unwrap();
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn yam_binary_still_requires_enable_and_admin_opt_in() {
+        let (app, state, run) = yam_binary_fixture().await;
+        app.settings.lock().await.allow_plugin_binaries = false;
+        assert!(start_package(app.clone(), "example.worker".into(), vec![]).await.is_err());
+        app.settings.lock().await.allow_plugin_binaries = true;
+        app.plugins.lock().await.enabled.remove("example.worker");
+        assert!(start_package(app.clone(), "example.worker".into(), vec![]).await.is_err());
+        assert!(!state.join("ready").exists());
+        assert!(yam_exclusive_available(&run));
+        assert!(app.runtime_tokens.lock().await.get("example.worker").is_none());
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn yam_binary_failed_exit_releases_lease_and_runtime_token() {
+        let (app, _state, run) = yam_binary_fixture().await;
+        let script = app.root.join("yam/pkgs/example/worker/1.0.0/share/luna/plugins/example.worker/run.sh");
+        fs::write(script, "exit 7\n").unwrap();
+        start_package(app.clone(), "example.worker".into(), vec![]).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while app.plugins.lock().await.running.contains_key("example.worker") {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }).await.unwrap();
+        assert!(yam_exclusive_available(&run));
+        assert!(app.runtime_tokens.lock().await.get("example.worker").is_none());
         fs::remove_dir_all(&app.root).unwrap();
     }
 
