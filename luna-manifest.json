@@ -19,8 +19,8 @@
       "manifest_path": "stations/yandexmini/Cargo.toml",
       "models": ["yandexmini", "yandexstationmini", "yandex-station-mini", "yndx-0004"],
       "binary": "luna-yandexmini",
-      "asset": "luna-yandexmini-armv7-linux-musleabihf",
-      "target": "armv7-unknown-linux-musleabihf"
+      "asset": "luna-yandexmini-aarch64-linux-musl",
+      "target": "aarch64-unknown-linux-musl"
     },
     {
       "device": "yandexmicro",
