@@ -41,6 +41,7 @@ end
 - [Начало работы с Luna](docs/GETTING_STARTED.md)
 - [Как написать пакет на Luna](docs/PACKAGE_GUIDE.md)
 - [Как добавить поддержку станции](docs/DEVICE_GUIDE.md)
+- [Как доработать уже поддержанную станцию](docs/EXTENDING_STATION.md)
 - [Полный HTTP API](docs/API.md)
 - [Lua-плагины через YAM](docs/PLUGINS.md)
 - [Медиапровайдеры](docs/MEDIA_PROVIDERS.md)
