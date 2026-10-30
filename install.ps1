@@ -2,6 +2,7 @@
 param(
     [string]$Version = $(if ($env:LUNA_VERSION) { $env:LUNA_VERSION } else { "latest" }),
     [string]$Serial = $(if ($env:ADB_SERIAL) { $env:ADB_SERIAL } else { "" }),
+    [string]$Platform = $(if ($env:LUNA_PLATFORM) { $env:LUNA_PLATFORM } else { "" }),
     [string]$Repository = $(if ($env:LUNA_REPOSITORY) { $env:LUNA_REPOSITORY } else { "https://github.com/nyakokitsu/luna" }),
     [string]$RemoteRoot = $(if ($env:LUNA_REMOTE_ROOT) { $env:LUNA_REMOTE_ROOT } else { "/data/quazar/luna" }),
     [switch]$Uninstall
@@ -66,22 +67,37 @@ echo "Luna removed"
     Invoke-WebRequest "$url/manifest.json" -OutFile "$temp/manifest.json" -UseBasicParsing
     Invoke-WebRequest "$url/SHA256SUMS" -OutFile "$temp/SHA256SUMS" -UseBasicParsing
     $manifest = Get-Content "$temp/manifest.json" -Raw | ConvertFrom-Json
-    Log "Detecting station"
-    $hostname = Invoke-AdbShell 'uname -n'
-    $hostname = $hostname.Trim()
+    
+    if (-not [string]::IsNullOrWhiteSpace($Platform)) {
+        $targetPlatform = $Platform.Trim()
+        Log "Using explicitly provided platform: $targetPlatform"
+    } else {
+        Log "Detecting station"
+        $targetPlatform = (Invoke-AdbShell 'uname -n').Trim()
+        Log "Auto-detected hostname: $targetPlatform"
+    }
+
     $found = @()
     foreach ($entry in @($manifest.devices)) {
-        foreach ($modelAlias in @($entry.models)) {
-            if ([string]$modelAlias -ieq $hostname) {
-                $found += $entry
-                break
+        $matched = $false
+        if ($entry.codename -ieq $targetPlatform -or $entry.device -ieq $targetPlatform) {
+            $matched = $true
+        } else {
+            foreach ($modelAlias in @($entry.models)) {
+                if ([string]$modelAlias -ieq $targetPlatform) {
+                    $matched = $true
+                    break
+                }
             }
         }
+        if ($matched) {
+            $found += $entry
+        }
     }
-    if ($found.Count -ne 1) { throw "Unsupported or ambiguous station. Detected: $hostname" }
+    if ($found.Count -ne 1) { throw "Unsupported or ambiguous station. Target: $targetPlatform" }
     $entry = $found[0]
     $asset = $entry.asset
-    Log "Detected $($entry.device) ($($entry.codename)) from hostname $hostname"
+    Log "Selected $($entry.device) ($($entry.codename)) [Asset: $asset]"
     Log "Downloading $asset"
     Invoke-WebRequest "$url/$asset" -OutFile "$temp/$asset" -UseBasicParsing
     $sumLine = Get-Content "$temp/SHA256SUMS" | Where-Object { $_ -match "\s$([regex]::Escape($asset))$" } | Select-Object -First 1
