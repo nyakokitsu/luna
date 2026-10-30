@@ -298,7 +298,8 @@ for proc in /proc/[0-9]*; do
   fi
 done
 
-[ -f "$binary" ] && cp "$binary" "$backup"
+[ -f "$backup" ] && rm -f "$backup"
+[ -f "$binary" ] && mv "$binary" "$backup"
 mv "$staged" "$binary"
 nohup "$binary" --listen "$LUNA_LISTEN" --data-dir "$data" >"$logfile" 2>&1 </dev/null &
 echo $! > "$pidfile"

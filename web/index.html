@@ -7,7 +7,7 @@
   <style>
     :root { color-scheme: dark; --bg:#0d1117; --panel:#161d27; --line:#2a3645; --text:#e6edf3; --muted:#8b98a8; --accent:#62a0ff; --ok:#62d394; --bad:#ff7b72; }
     * { box-sizing:border-box; }
-    body { max-width:1280px; margin:0 auto; padding:32px 18px 60px; font:14px/1.5 system-ui,sans-serif; background:radial-gradient(circle at 85% -10%,#193a65 0,#0d1117 38%); color:var(--text); }
+    body { max-width:1320px; margin:0 auto; padding:24px 18px 60px; font:14px/1.5 system-ui,sans-serif; background:radial-gradient(circle at 85% -10%,#193a65 0,#0d1117 38%); color:var(--text); }
     h1 { margin:0 0 5px; font-size:32px; letter-spacing:-.04em; background:linear-gradient(100deg,#fff,#8dbbff); -webkit-background-clip:text; background-clip:text; color:transparent; } h2 { margin:0 0 14px; font-size:19px; letter-spacing:-.02em; }
     h3 { margin:22px 0 10px; font-size:15px; color:#b7c5d6; }
     p { color:var(--muted); } section { margin:16px 0; padding:20px; background:rgba(22,29,39,.92); border:1px solid var(--line); border-radius:14px; box-shadow:0 12px 35px rgba(0,0,0,.16); }
@@ -30,7 +30,15 @@
     .body { min-height:68px; } .response { min-height:68px; max-height:220px; overflow:auto; margin:0; padding:9px; background:#0a0f15; border:1px solid var(--line); border-radius:7px; white-space:pre-wrap; word-break:break-word; color:#b7c5d6; }
     .response.ok { color:var(--ok); } .response.bad { color:var(--bad); }
     .test-running { border-color:#3478c8; }
-    .web-tabs { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:18px 0 12px; padding:6px; background:rgba(22,29,39,.8); border:1px solid var(--line); border-radius:10px; }
+    .hero { display:flex; gap:18px; align-items:flex-end; justify-content:space-between; margin-bottom:18px; }
+    .hero-copy { max-width:760px; }
+    .hero-actions { display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end; }
+    .hero-actions button { min-height:38px; }
+    .section-nav { position:sticky; top:10px; z-index:10; display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin:12px 0 18px; padding:7px; background:rgba(13,17,23,.88); border:1px solid var(--line); border-radius:12px; backdrop-filter:blur(14px); box-shadow:0 10px 28px rgba(0,0,0,.22); }
+    .section-nav a { color:#b7c9e2; text-decoration:none; padding:7px 11px; border-radius:8px; }
+    .section-nav a:hover { color:#fff; background:#214d80; }
+    .section-nav .nav-spacer { flex:1; }
+    .web-tabs { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:0 0 12px; padding:6px; background:rgba(22,29,39,.8); border:1px solid var(--line); border-radius:10px; }
     .web-tabs button { padding:7px 13px; background:transparent; border-color:transparent; box-shadow:none; }
     .web-tabs button:hover, .web-tabs button.active { background:#214d80; border-color:#3478c8; transform:none; }
     .web-tabs .tab-plugin { background:#202b38; }
@@ -38,12 +46,37 @@
     .custom-web-panel iframe { display:block; width:100%; height:720px; border:0; background:#0d1117; }
     .custom-web-empty { padding:28px; color:var(--muted); }
     .endpoint button { white-space:nowrap; } .upload-row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
-    @media (max-width:900px) { .endpoint { grid-template-columns:1fr; } .endpoint button { width:max-content; } }
+    .endpoint-toolbar { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:0 0 16px; padding:10px; background:#101720; border:1px solid var(--line); border-radius:10px; }
+    .endpoint-toolbar input { min-width:220px; flex:1; }
+    .endpoint-tabs { display:flex; gap:6px; flex-wrap:wrap; }
+    .endpoint-tabs button { padding:6px 10px; background:#202b38; border-color:var(--line); box-shadow:none; }
+    .endpoint-tabs button.active { background:#2867ad; border-color:#62a0ff; }
+    .endpoint.is-hidden, .endpoint-category.is-hidden { display:none; }
+    .empty-filter { display:none; padding:18px 10px; color:var(--muted); }
+    @media (max-width:900px) { .hero { align-items:flex-start; flex-direction:column; } .hero-actions { justify-content:flex-start; } .endpoint { grid-template-columns:1fr; } .endpoint button { width:max-content; } .section-nav { position:static; } }
   </style>
 </head>
 <body>
-  <h1>Luna API</h1>
-  <p>Каждый блок ниже отправляет запрос к endpoint и показывает его ответ.</p>
+  <div class="hero">
+    <div class="hero-copy">
+      <h1>Luna API</h1>
+      <p>Управление станцией и проверка capabilities без curl. Выберите раздел или найдите endpoint по пути.</p>
+    </div>
+    <div class="hero-actions">
+      <button onclick="refreshPageData()">Обновить всё</button>
+      <button class="secondary" onclick="location.hash='api-endpoints'">К endpoint’ам</button>
+    </div>
+  </div>
+  <nav class="section-nav" aria-label="Навигация по Luna">
+    <a href="#overview">Обзор</a>
+    <a href="#tests">Тест API</a>
+    <a href="#room">Комната</a>
+    <a href="#settings">Настройки</a>
+    <a href="#api-endpoints">Endpoints</a>
+    <a href="#install">Установка</a>
+    <span class="nav-spacer"></span>
+    <a href="#web-tabs">Плагины</a>
+  </nav>
   <nav id="web-tabs" class="web-tabs" aria-label="Разделы Luna">
     <button class="active" data-tab="luna" onclick="selectWebTab('luna', this)">Luna</button>
   </nav>
@@ -53,7 +86,7 @@
     <iframe id="custom-web-frame" title="Custom Luna web"></iframe>
   </section>
 
-  <section>
+  <section id="overview">
     <div class="device-head">
       <div><h2>GET /api/device</h2><div class="hint">Состояние станции и доступные capabilities</div></div>
       <button onclick="sendDevice()">Обновить device</button>
@@ -61,7 +94,7 @@
     <pre id="device-response" class="response">Запрос ещё не выполнялся</pre>
   </section>
 
-  <section>
+  <section id="tests">
     <div class="device-head">
       <div><h2>Тест API</h2><div class="hint">Проверяет безопасные функции Luna и пишет результат по каждому шагу. Функции, которые ждут действие пользователя или меняют состояние станции, будут отмечены как пропущенные.</div></div>
       <div class="settings-actions">
@@ -72,7 +105,7 @@
     <pre id="api-test-log" class="response" style="min-height:180px;max-height:420px">Тест ещё не запускался</pre>
   </section>
 
-  <section>
+  <section id="room">
     <h2>Комната</h2>
     <div class="hint">Локальная метка станции. Пустое поле удаляет её.</div>
     <div class="upload-row" style="margin-top:10px">
@@ -83,7 +116,7 @@
     <pre id="room-response" class="response">Комната ещё не загружена</pre>
   </section>
 
-  <section>
+  <section id="settings">
     <h2>Настройки Luna</h2>
     <div class="hint">Настройки загружаются через GET и сохраняются через PUT.</div>
     <div class="settings-group">
@@ -139,8 +172,12 @@
     <pre id="settings-response" class="response">Настройки ещё не загружены</pre>
   </section>
 
-  <section>
+  <section id="api-endpoints">
     <h2>API endpoints</h2>
+    <div class="endpoint-toolbar">
+      <input id="endpoint-search" type="search" placeholder="Поиск: /led, bluetooth, clock…" aria-label="Поиск endpoint’ов">
+      <div id="endpoint-tabs" class="endpoint-tabs" role="tablist" aria-label="Категории endpoint’ов"></div>
+    </div>
 
     <h3>Device и sensors</h3>
     <div class="endpoint" data-method="GET" data-path="/room">
@@ -184,6 +221,22 @@
     <div class="endpoint" data-method="POST" data-path="/led/off/logo">
       <div><div class="endpoint-title"><span class="method">POST</span><code>/api/led/off/logo</code></div><input class="path" value="/led/off/logo"></div>
       <textarea class="body" placeholder="Body не требуется"></textarea><pre class="response">—</pre><button onclick="sendEndpoint(this)">Отправить</button>
+    </div>
+
+    <h3>Audio</h3>
+    <div class="endpoint" data-method="POST" data-path="/audio/test">
+      <div><div class="endpoint-title"><span class="method">POST</span><code>/api/audio/test</code></div><input class="path" value="/audio/test"></div>
+      <textarea class="body" placeholder="Body не требуется"></textarea><pre class="response">4-секундный тестовый аудиофрагмент</pre><button onclick="sendEndpoint(this)">Отправить</button>
+    </div>
+
+    <h3>Громкость</h3>
+    <div class="endpoint" data-method="GET" data-path="/volume/get">
+      <div><div class="endpoint-title"><span class="method">GET</span><code>/api/volume/get</code></div><input class="path" value="/volume/get"></div>
+      <textarea class="body" placeholder="Body не требуется"></textarea><pre class="response">—</pre><button onclick="sendEndpoint(this)">Отправить</button>
+    </div>
+    <div class="endpoint" data-method="POST" data-path="/volume/set">
+      <div><div class="endpoint-title"><span class="method">POST</span><code>/api/volume/set</code></div><input class="path" value="/volume/set"></div>
+      <textarea class="body">{"percent":30}</textarea><pre class="response">—</pre><button onclick="sendEndpoint(this)">Отправить</button>
     </div>
 
     <h3>Media providers</h3>
@@ -368,7 +421,7 @@
     </div>
   </section>
 
-  <section>
+  <section id="install">
     <h2>Установка .yap</h2>
     <div class="upload-row"><input id="package-file" type="file" accept=".yap"><button onclick="uploadPackage()">POST /api/plugins</button><span id="upload-response" class="hint">—</span></div>
   </section>
@@ -506,6 +559,79 @@ async function uploadPackage() {
   } catch (error) { output.textContent = 'Ошибка: ' + error.message; }
 }
 
+function refreshPageData() {
+  sendDevice();
+  loadRoom();
+  loadSettings();
+  refreshCustomWebTabs();
+}
+
+function setupEndpointNavigation() {
+  const section = document.getElementById('api-endpoints');
+  const tabs = document.getElementById('endpoint-tabs');
+  const search = document.getElementById('endpoint-search');
+  if (!section || !tabs || !search) return;
+
+  const endpoints = Array.from(section.querySelectorAll('.endpoint'));
+  const headings = Array.from(section.querySelectorAll('h3'));
+  const categoryByEndpoint = new Map();
+  headings.forEach(function (heading) {
+    const category = heading.textContent.trim();
+    heading.classList.add('endpoint-category');
+    let next = heading.nextElementSibling;
+    while (next && !next.matches('h3')) {
+      if (next.matches('.endpoint')) categoryByEndpoint.set(next, category);
+      next = next.nextElementSibling;
+    }
+  });
+
+  let currentCategory = 'all';
+  const categories = ['Все'].concat(Array.from(new Set(endpoints.map(function (item) {
+    return categoryByEndpoint.get(item) || 'Другое';
+  }))));
+  categories.forEach(function (label, index) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = label;
+    button.dataset.category = index === 0 ? 'all' : label;
+    button.setAttribute('role', 'tab');
+    button.onclick = function () {
+      currentCategory = button.dataset.category;
+      tabs.querySelectorAll('button').forEach(function (item) { item.classList.toggle('active', item === button); });
+      updateEndpointVisibility();
+    };
+    if (index === 0) button.classList.add('active');
+    tabs.appendChild(button);
+  });
+
+  const empty = document.createElement('div');
+  empty.className = 'empty-filter';
+  empty.textContent = 'Ничего не найдено';
+  section.appendChild(empty);
+
+  function updateEndpointVisibility() {
+    const query = search.value.trim().toLowerCase();
+    let visible = 0;
+    endpoints.forEach(function (item) {
+      const itemCategory = categoryByEndpoint.get(item) || 'Другое';
+      const haystack = (item.textContent + ' ' + item.dataset.path).toLowerCase();
+      const matches = (currentCategory === 'all' || currentCategory === itemCategory) && (!query || haystack.indexOf(query) >= 0);
+      item.classList.toggle('is-hidden', !matches);
+      if (matches) visible += 1;
+    });
+    headings.forEach(function (heading) {
+      const headingCategory = heading.textContent.trim();
+      const hasVisible = endpoints.some(function (item) {
+        return !item.classList.contains('is-hidden') && categoryByEndpoint.get(item) === headingCategory;
+      });
+      heading.classList.toggle('is-hidden', !hasVisible);
+    });
+    empty.style.display = visible ? 'none' : 'block';
+  }
+  search.addEventListener('input', updateEndpointVisibility);
+  updateEndpointVisibility();
+}
+
 let apiTestStopped = false;
 let apiTestRunning = false;
 const apiTestLog = document.getElementById('api-test-log');
@@ -570,6 +696,13 @@ async function testClock(path, body) {
     await testRequest('POST', '/clock/off', undefined, 5000);
   }
 }
+async function testAudio() {
+  const result = await testRequest('POST', '/audio/test', undefined, 7000);
+  if (result && result.response.ok) {
+    testLog('… ждём завершения аудиофрагмента: 4 секунды');
+    await testSleep(4500);
+  }
+}
 function testSkip(path, reason) { testLog('— ' + path + ': пропущено (' + reason + ')'); }
 async function runApiTest() {
   if (apiTestRunning) return;
@@ -603,6 +736,13 @@ async function runApiTest() {
     else testSkip('/led/logo и /led/off/logo', 'logo отсутствует');
     if (led.has_ring || led.has_logo || Number(led.ring_count) > 0 || Number(led.logo_count) > 0) await testLed('/led', '/led/off', {colors:['#FF0000']});
     else testSkip('/led и /led/off', 'LED отсутствуют');
+
+    const features = device && Array.isArray(device.features) ? device.features : [];
+    if (features.some(function (item) { return String(item).indexOf('audio.play.') === 0; })) {
+      await testAudio();
+    } else {
+      testSkip('/audio/test', 'аудио отсутствует');
+    }
 
     const clock = device && (device.clock || device.features || []);
     if (device && (device.clock || (Array.isArray(clock) && clock.some(function (item) { return String(item).indexOf('clock') >= 0; })))) {
@@ -677,6 +817,7 @@ sendDevice();
 loadRoom();
 loadSettings();
 refreshCustomWebTabs();
+setupEndpointNavigation();
 setInterval(refreshCustomWebTabs, 5000);
 </script>
 </body>

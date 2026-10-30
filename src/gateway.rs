@@ -2791,6 +2791,34 @@ pub(crate) fn play_audio_file(path: &Path) -> Result<()> {
     Ok(())
 }
 
+const API_TEST_AUDIO: &[u8] = include_bytes!("../assets/audio-test.wav");
+
+fn write_api_test_audio(path: &Path) -> Result<()> {
+    fs::write(path, API_TEST_AUDIO)
+        .with_context(|| format!("write audio test file {}", path.display()))?;
+    Ok(())
+}
+
+async fn audio_test(State(a): State<App>) -> Result<Json<serde_json::Value>, ApiError> {
+    if !crate::audio::available() {
+        return Err(ApiError(anyhow!("audio playback is not available")));
+    }
+    let path = a.root.join(".luna-api-test-tone.wav");
+    let play_path = path.clone();
+    task::spawn_blocking(move || {
+        write_api_test_audio(&play_path)?;
+        play_audio_file(&play_path)
+    })
+    .await
+    .context("audio test task failed")??;
+    Ok(Json(serde_json::json!({
+        "played": true,
+        "duration_ms": 4000,
+        "format": "pcm_s16le",
+        "source": "bundled test excerpt"
+    })))
+}
+
 fn ipc_request(service: &str, payload: &[u8], timeout_ms: u64) -> Result<Option<Vec<u8>>> {
     if timeout_ms > 60_000 {
         bail!("IPC timeout is limited to 60 seconds")
@@ -3347,8 +3375,7 @@ async fn run_plugin(app: App, id: String, event: String, cancelled: Arc<AtomicBo
                     if percent > 100 {
                         return Err(mlua::Error::external("volume must be 0..100"));
                     };
-                    amixer_output(&["set".into(), "Master".into(), format!("{percent}%")])
-                        .map_err(mlua::Error::external)
+                    set_volume_backend(percent, false).map_err(mlua::Error::external)
                 })?,
             )?;
             volume.set(
@@ -5847,10 +5874,13 @@ pub async fn run_with_station(station: Option<StationSpec>) -> Result<()> {
             .route("/api/bluetooth/scan", put(put_bluetooth_scan))
             .route("/api/bluetooth/:action", post(post_bluetooth_action))
             .route("/api/volume", get(get_volume).post(set_volume))
+            .route("/api/volume/get", get(get_volume))
+            .route("/api/volume/set", post(set_volume))
             .route("/api/volume/up", post(volume_up))
             .route("/api/volume/down", post(volume_down))
             .route("/api/volume/mute", post(mute_volume))
             .route("/api/volume/unmute", post(unmute_volume))
+            .route("/api/audio/test", post(audio_test))
             .route("/api/microphone/devices", get(get_microphone_devices))
             .route("/api/microphone/record", post(record_microphone))
             .route("/api/alice/command", get(get_alice_command))

@@ -38,6 +38,7 @@ end
 
 ## Документация
 
+- [Начало работы с Luna](docs/GETTING_STARTED.md)
 - [Как написать пакет на Luna](docs/PACKAGE_GUIDE.md)
 - [Как добавить поддержку станции](docs/DEVICE_GUIDE.md)
 - [Полный HTTP API](docs/API.md)
