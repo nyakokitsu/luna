@@ -3,6 +3,7 @@ set -eu
 log() { printf '[%s] %s\n' "$(date '+%H:%M:%S')" "$*" >&2; }
 
 VERSION=${1:-${LUNA_VERSION:-latest}}
+PLATFORM=${2:-${LUNA_PLATFORM:-}}
 REPOSITORY=${LUNA_REPOSITORY:-https://github.com/nyakokitsu/luna}
 ROOT=${LUNA_REMOTE_ROOT:-/data/quazar/luna}
 SERIAL=${ADB_SERIAL:-}
@@ -46,32 +47,46 @@ log "Downloading release metadata"
 download "$URL/SHA256SUMS" "$TMP/SHA256SUMS"
 download "$URL/manifest.json" "$TMP/manifest.json"
 adb_optional() { adb -s "$SERIAL" shell "$1" 2>/dev/null || true; }
-log "Detecting station"
-HOSTNAME=$(adb_optional 'uname -n')
-CANDIDATES=$(printf '%s\n' "$HOSTNAME" | sed '/^$/d')
-RECORD=$(python3 - "$TMP/manifest.json" "$CANDIDATES" <<'PY'
+
+if [ -n "$PLATFORM" ]; then
+  log "Using explicitly provided platform: $PLATFORM"
+  TARGET="$PLATFORM"
+else
+  log "Detecting station"
+  TARGET=$(adb_optional 'uname -n' | tr -d '\r')
+  log "Auto-detected hostname: $TARGET"
+fi
+
+[ -n "$TARGET" ] || { echo "Could not detect platform or hostname" >&2; exit 7; }
+
+RECORD=$(python3 - "$TMP/manifest.json" "$TARGET" <<'PY'
 import json, re, sys
 data=json.load(open(sys.argv[1], encoding="utf-8"))
-values=[x.strip() for x in sys.argv[2].splitlines() if x.strip()]
+target=sys.argv[2].strip()
+
 def compact(x):
-    x = re.sub(r"[A-Z]{4}$", "", x.strip())
+    if not x: return ""
+    x = re.sub(r"[A-Z]{4}$", "", str(x).strip())
     return re.sub(r"[^a-z0-9]", "", re.sub(r"[-_][a-z0-9]{4}$", "", x.lower()))
-ids=[compact(x) for x in values]
-found=[]
-for entry in data["devices"]:
-    aliases=entry.get("models",[]) or [entry["device"],entry.get("codename","")]
-    aliases=[compact(x) for x in aliases if x]
-    if not any(a == c or a in c or c in a for a in aliases for c in ids): continue
-    found.append(entry)
-if len(found) != 1: raise SystemExit("model was not matched uniquely")
-e=found[0]
-print("\t".join((e["device"],e["asset"],e.get("codename",""))))
+
+t_norm = compact(target)
+found = []
+for entry in data.get("devices", []):
+    aliases = entry.get("models", []) + [entry.get("device", ""), entry.get("codename", "")]
+    aliases = [compact(x) for x in aliases if x]
+    if any(t_norm == a or t_norm in a or a in t_norm for a in aliases):
+        found.append(entry)
+
+if len(found) != 1: sys.exit(1)
+e = found[0]
+print("\t".join((e["device"], e["asset"], e.get("codename", ""))))
 PY
-  ) || { echo "Unsupported or ambiguous station: $HOSTNAME ($ARCH)" >&2; exit 7; }
+) || { echo "Unsupported or ambiguous station: $TARGET" >&2; exit 7; }
+
 IFS="$(printf '\t')" read -r DEVICE ASSET CODENAME <<EOF
 $RECORD
 EOF
-echo "Detected $DEVICE${CODENAME:+ ($CODENAME)} from hostname $HOSTNAME" >&2
+echo "Selected $DEVICE${CODENAME:+ ($CODENAME)} for $TARGET" >&2
 log "Downloading $ASSET"
 download "$URL/$ASSET" "$TMP/$ASSET"
 log "Verifying checksum"
