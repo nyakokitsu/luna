@@ -6,7 +6,9 @@ const COUNT: usize = 3;
 const NATIVE_TRIGGER: &str = "led_ring_fb";
 
 pub fn create_led_backend() -> Result<Box<dyn LedBackend>> {
-    Ok(Box::new(SysfsRing { root: PathBuf::from("/sys/class/leds") }))
+    Ok(Box::new(SysfsRing {
+        root: PathBuf::from("/sys/class/leds"),
+    }))
 }
 
 struct SysfsRing {
@@ -15,7 +17,8 @@ struct SysfsRing {
 
 impl SysfsRing {
     fn channel_path(&self, channel: &str, index: usize, attribute: &str) -> PathBuf {
-        self.root.join(format!("plum:{channel}:ring{index}/{attribute}"))
+        self.root
+            .join(format!("plum:{channel}:ring{index}/{attribute}"))
     }
 }
 
@@ -47,9 +50,10 @@ impl LedBackend for SysfsRing {
                 let path = self.channel_path(channel, index, "trigger");
                 let triggers = fs::read_to_string(&path)
                     .with_context(|| format!("read {}", path.display()))?;
-                if !triggers.split_whitespace().any(|name| {
-                    name.trim_matches(['[', ']']) == NATIVE_TRIGGER
-                }) {
+                if !triggers
+                    .split_whitespace()
+                    .any(|name| name.trim_matches(['[', ']']) == NATIVE_TRIGGER)
+                {
                     bail!("native LED trigger unavailable at {}", path.display());
                 }
                 paths.push(path);
@@ -74,7 +78,9 @@ mod tests {
     impl Fixture {
         fn new() -> Self {
             let root = std::env::temp_dir().join(format!(
-                "luna-plum-led-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)
+                "luna-plum-led-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
             ));
             fs::create_dir(&root).unwrap();
             let ring = SysfsRing { root };
@@ -106,19 +112,38 @@ mod tests {
         f.0.restore_ring_trigger().unwrap();
         for index in 1..=COUNT {
             for channel in ["red", "green", "blue"] {
-                assert_eq!(fs::read_to_string(f.0.channel_path(channel, index, "trigger")).unwrap(), NATIVE_TRIGGER);
-                assert_eq!(fs::read_to_string(f.0.channel_path(channel, index, "brightness")).unwrap(), "23");
+                assert_eq!(
+                    fs::read_to_string(f.0.channel_path(channel, index, "trigger")).unwrap(),
+                    NATIVE_TRIGGER
+                );
+                assert_eq!(
+                    fs::read_to_string(f.0.channel_path(channel, index, "brightness")).unwrap(),
+                    "23"
+                );
             }
         }
-        assert_eq!(fs::read_to_string(f.0.root.join("plum:white:clock1/trigger")).unwrap(), "[clock]");
-        assert_eq!(fs::read_to_string(f.0.root.join("plum:white:clock1/brightness")).unwrap(), "77");
+        assert_eq!(
+            fs::read_to_string(f.0.root.join("plum:white:clock1/trigger")).unwrap(),
+            "[clock]"
+        );
+        assert_eq!(
+            fs::read_to_string(f.0.root.join("plum:white:clock1/brightness")).unwrap(),
+            "77"
+        );
     }
 
     #[test]
     fn unsupported_trigger_refuses_before_any_write() {
         let f = Fixture::new();
-        fs::write(f.0.channel_path("blue", COUNT, "trigger"), "[none] timer ledfb-ring").unwrap();
+        fs::write(
+            f.0.channel_path("blue", COUNT, "trigger"),
+            "[none] timer ledfb-ring",
+        )
+        .unwrap();
         assert!(f.0.restore_ring_trigger().is_err());
-        assert_eq!(fs::read_to_string(f.0.channel_path("red", 1, "trigger")).unwrap(), "[none] timer led_ring_fb heartbeat\n");
+        assert_eq!(
+            fs::read_to_string(f.0.channel_path("red", 1, "trigger")).unwrap(),
+            "[none] timer led_ring_fb heartbeat\n"
+        );
     }
 }
