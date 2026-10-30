@@ -35,6 +35,7 @@ fn acquire_at(path: &Path) -> Result<InstanceGuard> {
 
     if try_lock(&file)? {
         write_owner(&file)?;
+        stop_legacy_instances()?;
         return Ok(InstanceGuard {
             file,
             path: path.to_path_buf(),
@@ -168,6 +169,42 @@ fn terminate(pid: u32) -> Result<()> {
         let error = std::io::Error::last_os_error();
         if error.raw_os_error() != Some(libc::ESRCH) {
             return Err(error).with_context(|| format!("stop previous Luna process {pid}"));
+        }
+    }
+    Ok(())
+}
+
+fn stop_legacy_instances() -> Result<()> {
+    let current_pid = std::process::id();
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return Ok(());
+    };
+
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Ok(pid) = name.to_string_lossy().parse::<u32>() else {
+            continue;
+        };
+        if pid == current_pid || !is_luna_process(pid) {
+            continue;
+        }
+
+        tracing::info!(pid, "stopping legacy Luna instance without shared lock");
+        terminate(pid)?;
+        for _ in 0..50 {
+            if !process_exists(pid) || !is_luna_process(pid) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        if process_exists(pid) && is_luna_process(pid) {
+            tracing::warn!(
+                pid,
+                "legacy Luna did not stop after SIGTERM; sending SIGKILL"
+            );
+            unsafe {
+                libc::kill(pid as libc::pid_t, libc::SIGKILL);
+            }
         }
     }
     Ok(())
