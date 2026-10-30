@@ -5602,6 +5602,9 @@ pub async fn run_with_station(station: Option<StationSpec>) -> Result<()> {
         println!("{}", room.room.unwrap_or_default());
         return Ok(());
     }
+    // One fixed lock is shared by YAM-installed and manually copied Luna
+    // binaries, regardless of their executable paths.
+    let _instance_guard = crate::instance::acquire()?;
     fs::create_dir_all(&args.data_dir)?;
     let (yam_root, yam_run) = resolve_yam_paths(&args);
     if yam_root.is_some() && yam_run.is_none() {

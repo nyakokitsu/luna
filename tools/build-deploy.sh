@@ -243,20 +243,60 @@ mount -o remount,rw / 2>/dev/null || true
 mkdir -p "$root/bin" "$data"
 chmod 0755 "$staged"
 
+is_luna_pid() {
+  pid=$1
+  [ -r "/proc/$pid/cmdline" ] || return 1
+  cmd=$(tr '\000' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)
+  case "$cmd" in
+    */luna\ --listen*|luna\ --listen*|*\ luna\ --listen*|*/luna-*\ --listen*|luna-*\ --listen*|*\ luna-*\ --listen*)
+      case "$cmd" in
+        */luna-evread\ *|*/luna-iohub2\ *|*\ luna-evread\ *|*\ luna-iohub2\ *) return 1 ;;
+        *) return 0 ;;
+      esac
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+stop_luna_pid() {
+  pid=$1
+  case "$pid" in ''|*[!0-9]*) return 0 ;; esac
+  kill -0 "$pid" 2>/dev/null || return 0
+  if ! is_luna_pid "$pid"; then
+    echo "Skipping PID $pid: it is not the Luna main process" >&2
+    return 0
+  fi
+  case "$pid" in ''|*[!0-9]*) echo "invalid Luna pidfile" >&2; exit 1 ;; esac
+  echo "Stopping Luna PID $pid"
+  kill "$pid" 2>/dev/null || true
+  attempt=0
+  while kill -0 "$pid" 2>/dev/null && [ "$attempt" -lt 50 ]; do
+    sleep 0.1
+    attempt=$((attempt + 1))
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    echo "Luna PID $pid did not stop; forcing termination" >&2
+    kill -9 "$pid" 2>/dev/null || true
+  fi
+}
+
 if [ -f "$pidfile" ]; then
   pid=$(cat "$pidfile")
-  case "$pid" in ''|*[!0-9]*) echo "invalid Luna pidfile" >&2; exit 1 ;; esac
-  if kill -0 "$pid" 2>/dev/null; then
-    kill "$pid"
-    attempt=0
-    while kill -0 "$pid" 2>/dev/null && [ "$attempt" -lt 50 ]; do
-      sleep 0.1
-      attempt=$((attempt + 1))
-    done
-    kill -0 "$pid" 2>/dev/null && { echo "Luna did not stop" >&2; exit 1; }
-  fi
+  stop_luna_pid "$pid"
   rm -f "$pidfile"
 fi
+
+# YAM may have started Luna from its own package directory, while a previous
+# manual deployment may have used another directory.  The common lock in the
+# binary handles new versions; this scan also cleans up older Luna binaries
+# that predate the lock.
+for proc in /proc/[0-9]*; do
+  pid=${proc##*/}
+  [ "$pid" = "$$" ] && continue
+  if is_luna_pid "$pid"; then
+    stop_luna_pid "$pid"
+  fi
+done
 
 [ -f "$binary" ] && cp "$binary" "$backup"
 mv "$staged" "$binary"

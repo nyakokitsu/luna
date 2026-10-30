@@ -1,4 +1,5 @@
 mod process;
+mod instance;
 mod audio;
 mod clock_text;
 mod gateway;
