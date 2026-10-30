@@ -2,8 +2,31 @@
 set -eu
 log() { printf '[%s] %s\n' "$(date '+%H:%M:%S')" "$*" >&2; }
 
-VERSION=${1:-${LUNA_VERSION:-latest}}
-PLATFORM=${2:-${LUNA_PLATFORM:-}}
+VERSION=${LUNA_VERSION:-latest}
+PLATFORM=${LUNA_PLATFORM:-}
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --platform|-p)
+      [ "$#" -ge 2 ] || { echo "$1 requires a value" >&2; exit 2; }
+      PLATFORM=$2; shift 2 ;;
+    --version)
+      [ "$#" -ge 2 ] || { echo "$1 requires a value" >&2; exit 2; }
+      VERSION=$2; shift 2 ;;
+    --help|-h)
+      echo "Usage: $0 [VERSION] [--platform DEVICE]"; exit 0 ;;
+    -*)
+      echo "Unknown option: $1" >&2; exit 2 ;;
+    *)
+      if [ "$VERSION" = "latest" ] && [ -z "${LUNA_VERSION:-}" ]; then
+        VERSION=$1
+      elif [ -z "$PLATFORM" ]; then
+        PLATFORM=$1
+      else
+        echo "Unexpected argument: $1" >&2; exit 2
+      fi
+      shift ;;
+  esac
+done
 REPOSITORY=${LUNA_REPOSITORY:-https://github.com/nyakokitsu/luna}
 ROOT=${LUNA_REMOTE_ROOT:-/data/quazar/luna}
 SERIAL=${ADB_SERIAL:-}
@@ -51,18 +74,21 @@ adb_optional() { adb -s "$SERIAL" shell "$1" 2>/dev/null || true; }
 if [ -n "$PLATFORM" ]; then
   log "Using explicitly provided platform: $PLATFORM"
   TARGET="$PLATFORM"
+  EXPLICIT=1
 else
   log "Detecting station"
   TARGET=$(adb_optional 'uname -n' | tr -d '\r')
   log "Auto-detected hostname: $TARGET"
+  EXPLICIT=0
 fi
 
 [ -n "$TARGET" ] || { echo "Could not detect platform or hostname" >&2; exit 7; }
 
-RECORD=$(python3 - "$TMP/manifest.json" "$TARGET" <<'PY'
+RECORD=$(python3 - "$TMP/manifest.json" "$TARGET" "$EXPLICIT" <<'PY'
 import json, re, sys
 data=json.load(open(sys.argv[1], encoding="utf-8"))
 target=sys.argv[2].strip()
+explicit=sys.argv[3] == "1"
 
 def compact(x):
     if not x: return ""
@@ -74,7 +100,8 @@ found = []
 for entry in data.get("devices", []):
     aliases = entry.get("models", []) + [entry.get("device", ""), entry.get("codename", "")]
     aliases = [compact(x) for x in aliases if x]
-    if any(t_norm == a or t_norm in a or a in t_norm for a in aliases):
+    if (any(t_norm == a for a in aliases) if explicit else
+            any(t_norm == a or t_norm in a or a in t_norm for a in aliases)):
         found.append(entry)
 
 if len(found) != 1: sys.exit(1)
