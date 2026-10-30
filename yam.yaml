@@ -1,5 +1,5 @@
 name: yam/luna
-version: 0.2.9
+version: 0.2.10
 license: MIT
 description: Luna host runtime for Lua, Quasar and legacy plugins
 provides: [luna-yam-binary-host, luna-binary-dependencies-v1]
