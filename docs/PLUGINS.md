@@ -1,10 +1,10 @@
 # Lua-плагины через YAM
 
-Luna может читать Lua-плагины, установленные пакетным менеджером YAM. Yam
-владеет файлами, а Luna только читает их и запускает Lua с теми же правами,
-которые описаны в `plugin.toml`.
+YAM хранит файлы пакета, а Luna загружает и запускает Lua-плагин. Это
+разделение важно: Luna не меняет файлы, которыми владеет YAM, и не пытается
+самостоятельно обновлять пакет.
 
-Плагин размещается в общем дереве:
+Плагин размещается в общем дереве YAM:
 
 ```text
 share/luna/plugins/<namespace>.<name>/
@@ -12,10 +12,10 @@ share/luna/plugins/<namespace>.<name>/
 └── main.lua
 ```
 
-Каталог должен совпадать с id пакета YAM: например, `vasya/clock` становится
-`vasya.clock`. В `plugin.toml` id должен быть таким же.
+Для пакета `vasya/clock` каталог будет называться `vasya.clock`. Это имя
+должно совпадать с `id` в `plugin.toml`.
 
-## Пример пакета
+## Минимальный пакет
 
 `yam.yaml`:
 
@@ -34,7 +34,7 @@ files:
 
 ```toml
 id = "vasya.clock"
-name = "Clock"
+name = "Часы"
 version = "1.0.0"
 entry = "main.lua"
 permissions = ["led"]
@@ -46,65 +46,69 @@ features = ["led.ring.rgb"]
 `plugin/main.lua`:
 
 ```lua
-if not device.has_ring then
-  error("ring is unavailable")
+if device.has_ring then
+  alice.led.set.ring({"#00aaff"})
 end
-
-alice.led({colors = {"#00AAFF"}})
 ```
 
-## Пользовательская веб-страница
+Для чистого Lua-пакета используйте `targets: [any]`: в нём нет native-бинаря,
+поэтому CPU и libc станции не имеют значения. Пакету с native-файлами нужны
+отдельные targets и артефакты под соответствующие платформы.
 
-Плагин может зарегистрировать собственную HTML-страницу внутри Luna. Для этого
-добавьте разрешение `web`, положите HTML в каталог пакета и вызовите функцию из
-`main.lua`:
+Актуальный формат упаковки описан в [документации YAM](https://github.com/nyakokitsu/yam/blob/main/docs/PACKAGING.md).
+
+## Своя вкладка в веб-панели
+
+Плагин может добавить HTML-страницу в Luna Web UI. Для этого нужны permission
+`web`, режим сервиса и файл внутри каталога плагина:
 
 ```toml
 permissions = ["web"]
-launch = { mode = "service" }
+
+[launch]
+mode = "service"
 ```
 
 ```lua
 local url = register.customweb("web/index.html")
-print("web page: " .. url)
+print(url) -- /web/vasya.clock
 
 while true do
   alice.sleep(60000)
 end
 ```
 
-Страница будет доступна по адресу `/web/<plugin-id>`, например
-`/web/vasya.clock`, и появится отдельной вкладкой в веб-панели Luna. Путь к HTML
-ограничен каталогом самого пакета, принимаются только `.html` и `.htm` размером
-до 4 МБ. Страница живёт, пока запущен плагин; при его остановке регистрация
-удаляется. Это позволяет странице использовать обычные запросы к Luna API
-через `fetch('/api/...')`.
+Страница появится отдельной вкладкой и сможет обращаться к API Luna через
+`fetch('/api/...')`. Разрешены только `.html` и `.htm` из каталога пакета,
+размер страницы — до 4 МБ. Регистрация существует, пока работает плагин.
 
-Сборка и установка выполняются обычными командами Yam:
+## Как Luna видит каталог YAM
 
-```sh
-yam-publish pack .
-yam install vasya/clock
-```
+Luna ищет его в следующем порядке:
 
-Luna ищет каталог через `--yam-root`, `YAM_ROOT`, либо автоматически по пути
-установленного бинаря вида `$YAM_ROOT/pkgs/yam/luna/<version>/bin/luna`.
-Для блокировки чтения во время транзакций Yam можно передать `--yam-run` или
-задать `YAM_RUN`; Luna использует `$YAM_RUN/yam.lock` как shared lock. Если
-`YAM_ROOT` известен, а `YAM_RUN` нет, Luna продолжает работу без блокировки и
-пишет одно предупреждение.
+1. путь из `--yam-root`;
+2. переменная `YAM_ROOT`;
+3. путь рядом с установленным бинарём вида
+   `$YAM_ROOT/pkgs/yam/luna/<version>/bin/luna`.
 
-Плагины из Yam доступны в `GET /api/plugins` с полем `source: "yam"`. Их
-нельзя удалить через Luna или заменить загрузкой `.yap`; используйте:
+Для синхронизации с транзакциями YAM передайте `--yam-run` или задайте
+`YAM_RUN`. Тогда Luna использует `$YAM_RUN/yam.lock` как shared lock. Если
+`YAM_ROOT` найден, а `YAM_RUN` нет, Luna продолжит работу, но предупредит, что
+чтение каталога не синхронизировано с установкой.
+
+Плагин из YAM отмечается в `GET /api/plugins` как `source: "yam"`. Такой пакет
+нельзя удалить через Luna или заменить локальным `.yap`; используйте YAM:
 
 ```sh
 yam remove vasya/clock
 ```
 
-Состояние Luna и runtime log не записываются в дерево Yam. Они находятся в
-`<data-dir>/plugins/plugin-state/<id>/`. Lua-плагины поддерживаются, binary-
-плагины из Yam пока намеренно отклоняются.
+Состояние запуска и runtime-логи Luna хранятся отдельно, в
+`<data-dir>/plugins/plugin-state/<id>/`.
 
-Изменения обнаруживаются при старте, при ручном `POST /api/plugins/rescan` и
-фоновым сканированием раз в 30 секунд. Источники можно посмотреть через
-`GET /api/plugins/sources`.
+Изменения в каталоге обнаруживаются при запуске, после
+`POST /api/plugins/rescan` и во время фонового сканирования. Источники можно
+посмотреть через `GET /api/plugins/sources`.
+
+Binary-плагины из YAM намеренно не запускаются автоматически через Lua API.
+Для них используется отдельный runtime-контракт и отдельные permissions.

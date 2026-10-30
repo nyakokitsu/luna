@@ -1,62 +1,90 @@
 # Luna
 
-Luna — runtime и API-слой для пакетов, которым нужно работать с разными
-моделями станций Яндекса.
+Luna — это фреймворк и runtime для пакетов, которые должны работать на
+разных станциях Яндекса.
 
-Главная задача Luna — дать пакету единый API, скрывающий различия железа.
-Пакет работает с `Luna API`, а station crate конкретной модели переводит эти
-операции в sysfs, I²C, ALSA, evdev и другие локальные интерфейсы устройства.
+Пакет не общается с железом напрямую. Он обращается к Luna API, а Luna уже
+выбирает подходящую реализацию для конкретной станции: sysfs, I²C, evdev,
+framebuffer, ALSA или штатный IPC Quasar. Поэтому один пакет может работать на
+Mini, Mini 3, Midi, Micro и других устройствах без копии кода для каждой
+модели.
 
 ```text
 Lua-пакет
-   │  Luna API / permissions
-   ▼
-Luna gateway
-   │  единый hardware contract
-   ▼
-station crate → конкретное железо станции
+    ↓  Luna API и permissions
+Luna runtime / gateway
+    ↓  общий контракт capability
+station crate конкретной модели
+    ↓
+железо станции или штатный сервис Quasar
 ```
+
+Главная идея Luna — отделить логику пакета от особенностей устройства. Автор
+пакета проверяет, доступна ли нужная возможность, и вызывает единый API:
+
+```lua
+if device.has_ring then
+  alice.led.set.ring({"#00aaff"})
+end
+
+if device.has_clock then
+  alice.clock.time("12:34", 170)
+end
+```
+
+Если capability нет, пакет должен пропустить эту часть интерфейса или выбрать
+запасной вариант. Ему не нужно знать, сколько LED находится в кольце другой
+модели и какой sysfs-путь использует станция.
 
 ## Документация
 
-- [Гайд: как строить пакет на Luna](docs/PACKAGE_GUIDE.md)
-- [Гайд: как добавить новую станцию](docs/DEVICE_GUIDE.md)
+- [Как написать пакет на Luna](docs/PACKAGE_GUIDE.md)
+- [Как добавить поддержку станции](docs/DEVICE_GUIDE.md)
 - [Полный HTTP API](docs/API.md)
-- [Плагины через YAM](docs/PLUGINS.md)
+- [Lua-плагины через YAM](docs/PLUGINS.md)
+- [Медиапровайдеры](docs/MEDIA_PROVIDERS.md)
 - [Manifest поддерживаемых станций](luna-manifest.json)
 
 ## Установка
 
 ### Через YAM
 
-Рекомендуемый способ, если Yam уже установлен на станции:
+Если YAM уже установлен на станции, добавьте официальный реестр и установите
+runtime:
 
 ```sh
-yam --platform yandexmini3 install yam/luna
+/data/yam/bin/yam-run registry add official \
+  https://repo.yse.wtf/v2 \
+  --key ed25519:5Rz8F47uftWVU5kLgWYhprkEZ4rpP2kecUge/a7KQas=
+/data/yam/bin/yam-run install yam/luna
 ```
 
-YAM выбирает пакет под платформу станции. Для других устройств используйте
-соответствующий platform ID из [`luna-manifest.json`](luna-manifest.json).
+YAM выбирает бинарь по платформе станции. Если автоматическое определение не
+сработало, платформу можно указать явно:
 
-Standalone-установщик и установка через YAM — альтернативные способы. На
-станции Luna всё равно запускается только в одном экземпляре: YAM- и ручной
-запуск используют общий `/tmp/luna.lock`, а новый экземпляр заменяет старый.
+```sh
+YAM_PLATFORM=yandexmini /data/yam/bin/yam-run install yam/luna
+```
 
-### macOS / Linux
+Через YAM устанавливается пакет, а запускает его сервис YAM. На платформах без
+автоматического boot hook сервис нужно запустить способом, предусмотренным
+конфигурацией конкретной станции.
 
-Нужны `adb`, подключённая станция и включённая ADB-отладка:
+### Установка с компьютера
+
+Для macOS и Linux нужны `adb`, подключённая станция и включённая ADB-отладка:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/nyakokitsu/luna/main/install.sh | sh
 ```
 
-Для нескольких станций установщик предложит выбор. Для конкретной станции:
+Если станций несколько:
 
 ```sh
 ADB_SERIAL=<serial> sh install.sh
 ```
 
-### Windows PowerShell
+Для Windows PowerShell:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass
@@ -64,49 +92,35 @@ irm https://raw.githubusercontent.com/nyakokitsu/luna/main/install.ps1 -OutFile 
 .\install.ps1
 ```
 
-Установщик сам получает hostname через `uname -n`, находит его в `models`
-релизного manifest и скачивает соответствующий бинарь.
-
-Удаление:
+Установщик получает имя станции через `uname -n`, находит его среди `models` в
+релизном manifest и скачивает подходящий бинарь. Удаление в PowerShell:
 
 ```powershell
 .\install.ps1 -Uninstall
 ```
 
-## Что даёт Luna пакету
+### Два способа установки
 
-- единый Lua API для LED, часов, громкости, input, сенсоров, аудио, Bluetooth и IPC;
-- `is_available()` и device topology для безопасной работы на разных моделях;
-- permissions и ограничения сети, input, IPC, команд и системных операций;
-- единый HTTP API для управления и диагностики;
-- встроенная веб-панель с автоматическими тестами API;
-- вкладки Custom Web для интерфейсов Lua-пакетов;
-- запуск Lua-пакетов через локальную установку или YAM;
-- отдельные station crates без хардкода аппаратных параметров в gateway.
+YAM и ручная установка могут существовать на одной станции, но одновременно
+работает только один экземпляр Luna. Все актуальные бинарники используют
+общий `/tmp/luna.lock`. Новый экземпляр завершает уже запущенный Luna,
+независимо от того, из какой папки он был запущен.
 
-Пакет не должен определять модель по sysfs-путям и не должен напрямую открывать
-I²C/ALSA/evdev. Он проверяет capability и вызывает Luna API.
+## Что получает пакет
 
-### Интерфейсы пакетов в веб-панели
+- один Lua API для LED, часов, громкости, input, датчиков, аудио, Bluetooth и
+  локальных команд;
+- `device.has_*`, topology и `is_available()` для проверки возможностей;
+- permissions для ограничения доступа пакета;
+- HTTP API для управления и диагностики;
+- веб-панель с ручными тестами API;
+- собственные вкладки Web UI через `register.customweb()`;
+- единый способ запускать локальные и установленные через YAM пакеты;
+- аппаратную поддержку в отдельных station crate, а не в общем gateway.
 
-Lua-пакет может добавить собственную вкладку в веб-панель Luna. Для этого ему
-нужно разрешение `web` и работа в режиме сервиса:
-
-```toml
-permissions = ["web"]
-
-[launch]
-mode = "service"
-```
-
-```lua
-register.customweb("web/index.html")
-```
-
-После регистрации страница появляется отдельной вкладкой рядом с вкладкой
-Luna. Она открывается по `/web/<plugin-id>` и может вызывать API Luna через
-`fetch('/api/...')`. Публикуются только явно зарегистрированные HTML-файлы из
-каталога пакета; вкладка удаляется после остановки плагина.
+Пакет не должен разбирать модель станции, открывать I²C/ALSA/evdev или писать
+в sysfs. Если для работы нужна новая возможность, её сначала добавляют в crate
+станции и общий capability-контракт Luna.
 
 ## Поддерживаемые станции
 
@@ -119,19 +133,23 @@ Luna. Она открывается по `/web/<plugin-id>` и может выз
 | `yandexmidi` | `cucumber` | `aarch64-unknown-linux-musl` |
 | `yandexplum` | `plum` | `aarch64-unknown-linux-musl` |
 
+Полный список моделей и соответствий находится в
+[`luna-manifest.json`](luna-manifest.json).
+
 ## Разработка Luna
+
+Проверка workspace:
 
 ```sh
 cargo test --workspace --locked
 ```
 
-Для сборки и установки на подключённую станцию используйте единственный
-публичный helper:
+Сборка и установка выбранной станции на подключённое устройство:
 
 ```sh
 tools/build-deploy.sh --device yandexmini3
 ```
 
-Для новой станции создаётся `stations/<device>/` со своими `device.rs`,
-`station_main.rs` и hardware/capability-модулями. Общий gateway должен
-оставаться независимым от конкретных sysfs-путей и I²C-адресов.
+Новая станция получает собственную папку `stations/<device>/` со своим
+`station_main.rs`, hardware backend и capability-функциями. Общий gateway не
+должен содержать модельные имена, числа LED, sysfs-пути или I²C-адреса.
