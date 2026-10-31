@@ -24,8 +24,15 @@ function Invoke-AdbOptional([string]$Command) {
 }
 function Compact([string]$Value) {
     if ([string]::IsNullOrWhiteSpace($Value)) { return "" }
-    $value = $Value.Trim() -replace '[A-Z]{4}$', ''
-    return (($value.ToLowerInvariant() -replace '[-_][a-z0-9]{4}$', '') -replace '[^a-z0-9]', '')
+    $value = $Value.Trim() -creplace '[A-Z]{4}$', ''
+    # Отбрасываем серийный суффикс вроде "_F6D0" или "-16AK", только если
+    # в нём есть цифра. "-mini", "-lite" и "-midi" — части имени модели.
+    $value = $value.ToLowerInvariant() -creplace '[-_](?=[a-z]*[0-9])[a-z0-9]{4}$', ''
+    return ($value -creplace '[^a-z0-9]', '')
+}
+function Get-Aliases($Entry) {
+    return @(@($Entry.models) + @($Entry.device, $Entry.codename) |
+        Where-Object { $_ } | ForEach-Object { Compact ([string]$_) })
 }
 Require-Command "adb"
 if ($RemoteRoot -notmatch '^[A-Za-z0-9_./-]+$') { throw "Invalid remote root" }
@@ -77,22 +84,15 @@ echo "Luna removed"
         Log "Auto-detected hostname: $targetPlatform"
     }
 
-    $found = @()
-    foreach ($entry in @($manifest.devices)) {
-        $matched = $false
-        if ($entry.codename -ieq $targetPlatform -or $entry.device -ieq $targetPlatform) {
-            $matched = $true
-        } else {
-            foreach ($modelAlias in @($entry.models)) {
-                if ([string]$modelAlias -ieq $targetPlatform) {
-                    $matched = $true
-                    break
-                }
-            }
-        }
-        if ($matched) {
-            $found += $entry
-        }
+    # Те же правила, что и в install.sh: точный alias имеет приоритет,
+    # подстрока используется только как запасной вариант автоопределения.
+    $target = Compact $targetPlatform
+    $found = @(@($manifest.devices) | Where-Object { (Get-Aliases $_) -contains $target })
+    if ($found.Count -eq 0 -and [string]::IsNullOrWhiteSpace($Platform)) {
+        $found = @(@($manifest.devices) | Where-Object {
+            $aliases = Get-Aliases $_
+            @($aliases | Where-Object { $_.Contains($target) -or $target.Contains($_) }).Count -gt 0
+        })
     }
     if ($found.Count -ne 1) { throw "Unsupported or ambiguous station. Target: $targetPlatform" }
     $entry = $found[0]

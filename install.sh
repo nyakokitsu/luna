@@ -93,16 +93,22 @@ explicit=sys.argv[3] == "1"
 def compact(x):
     if not x: return ""
     x = re.sub(r"[A-Z]{4}$", "", str(x).strip())
-    return re.sub(r"[^a-z0-9]", "", re.sub(r"[-_][a-z0-9]{4}$", "", x.lower()))
+    # Отбрасываем серийный суффикс вроде "_F6D0" или "-16AK", только если
+    # в нём есть цифра. "-mini", "-lite" и "-midi" — части имени модели.
+    x = re.sub(r"[-_](?=[a-z]*[0-9])[a-z0-9]{4}$", "", x.lower())
+    return re.sub(r"[^a-z0-9]", "", x)
 
 t_norm = compact(target)
-found = []
-for entry in data.get("devices", []):
-    aliases = entry.get("models", []) + [entry.get("device", ""), entry.get("codename", "")]
-    aliases = [compact(x) for x in aliases if x]
-    if (any(t_norm == a for a in aliases) if explicit else
-            any(t_norm == a or t_norm in a or a in t_norm for a in aliases)):
-        found.append(entry)
+devices = data.get("devices", [])
+def aliases(entry):
+    names = entry.get("models", []) + [entry.get("device", ""), entry.get("codename", "")]
+    return [compact(x) for x in names if x]
+
+# Точное совпадение имеет приоритет; подстрока — только запасной вариант
+# автоматического определения.
+found = [e for e in devices if t_norm in aliases(e)]
+if not found and not explicit:
+    found = [e for e in devices if any(t_norm in a or a in t_norm for a in aliases(e))]
 
 if len(found) != 1: sys.exit(1)
 e = found[0]
