@@ -926,6 +926,11 @@ impl Led {
     async fn ring_count(&self) -> usize {
         if self.topology.ring_count > 0 {
             self.topology.ring_count
+        } else if self.backend.is_some() {
+            // A station backend has an explicit topology. Do not fall back to
+            // the generic settings count: a logo-only station must reject the
+            // ring endpoint instead of writing its logo through the ring path.
+            0
         } else {
             self.settings.lock().await.count
         }
