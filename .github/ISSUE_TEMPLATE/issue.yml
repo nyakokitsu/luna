@@ -1,0 +1,97 @@
+name: Сообщение о проблеме или предложение
+description: Сообщить об ошибке Luna или предложить улучшение
+title: ""
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Спасибо за обратную связь о Luna.
+
+        Перед созданием issue проверьте, что используете последнюю версию и что похожей задачи ещё нет в списке issues.
+
+  - type: dropdown
+    id: issue_type
+    attributes:
+      label: Тип обращения
+      options:
+        - Ошибка
+        - Предложение
+        - Поддержка устройства
+        - Документация
+    validations:
+      required: true
+
+  - type: input
+    id: luna_version
+    attributes:
+      label: Версия Luna
+      description: Укажите версию релиза или commit, например 0.2.14.
+      placeholder: 0.2.14
+    validations:
+      required: true
+
+  - type: input
+    id: station_model
+    attributes:
+      label: Модель станции
+      description: Укажите модель, codename и, если известно, версию прошивки.
+      placeholder: yandexmini / yandexmini3 (bergamot), прошивка .50
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Описание
+      description: Кратко опишите проблему или предлагаемое изменение.
+      placeholder: Что произошло?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Шаги воспроизведения
+      description: Для ошибки укажите команды, API-запросы или последовательность действий.
+      placeholder: |
+        1. Запустить Luna...
+        2. Выполнить запрос...
+        3. Получить ошибку...
+    validations:
+      required: false
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Ожидаемое поведение
+      placeholder: Что должно было произойти?
+    validations:
+      required: false
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Фактическое поведение
+      placeholder: Что произошло на самом деле?
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Логи и дополнительные данные
+      description: Приложите логи, ответ API, список capabilities и другую полезную информацию. Секреты и токены удалите.
+      render: shell
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Проверка перед отправкой
+      options:
+        - label: Я проверил(а), что похожего issue ещё нет.
+          required: true
+        - label: Я удалил(а) из логов токены, пароли и другие секретные данные.
+          required: true
