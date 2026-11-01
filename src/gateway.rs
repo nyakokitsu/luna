@@ -5724,7 +5724,12 @@ pub async fn run_with_station(station: Option<StationSpec>) -> Result<()> {
         .flatten();
     let mut device = detect_device(&args.data_dir, forced_model);
     if let Some(spec) = station {
-        device.model = spec.model.into();
+        // An explicit --model wins over the crate name: YAM ids and Luna crate
+        // names do not always agree (the Mini 3 is `bergamot` in YAM and
+        // `yandexmini3` here), and plugin manifests gate on the device model.
+        if args.model.is_none() {
+            device.model = spec.model.into();
+        }
         device.led = spec.led_topology;
         for capability in spec.capabilities {
             if *capability == "microphone.capture"
