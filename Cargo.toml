@@ -39,6 +39,7 @@ members = [
     "stations/yandexmidi",
     "stations/yandexplum",
     "stations/yandexstation_2",
+    "stations/yandexstation_3",
 ]
 
 [profile.release]

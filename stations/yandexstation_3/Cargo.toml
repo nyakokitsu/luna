@@ -1,0 +1,12 @@
+[package]
+name = "luna-yandexstation-3"
+version = "0.2.7"
+edition = "2021"
+
+[[bin]]
+name = "luna-yandexstation_3"
+path = "station_main.rs"
+
+[dependencies]
+anyhow = "1"
+luna = { path = "../.." }
