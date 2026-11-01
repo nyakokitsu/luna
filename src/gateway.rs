@@ -10,7 +10,7 @@ use axum::{
 };
 use clap::{Parser, Subcommand};
 use flate2::read::GzDecoder;
-use mlua::{HookTriggers, Lua, LuaOptions, LuaSerdeExt, StdLib, VmState};
+use mlua::{ChunkMode, HookTriggers, Lua, LuaOptions, LuaSerdeExt, StdLib, VmState};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -3131,6 +3131,34 @@ fn lua_callable_with_availability(
     Ok(table)
 }
 
+/// mlua always opens the base library, even in safe mode. Close the parts of it
+/// that reach past the sandbox before any package code runs:
+/// - binary chunks: Lua does not verify bytecode, so crafted bytecode can
+///   corrupt memory and run native code in the (root) daemon. `load` is kept
+///   for text only, and `string.dump` goes because nothing can load its output.
+/// - `loadfile` / `dofile`: they read and run arbitrary filesystem paths.
+fn harden_lua(lua: &Lua) -> mlua::Result<()> {
+    lua.load(
+        r##"
+        local text_load = load
+        load = function(chunk, chunkname, _mode, ...)
+            -- Forward env only when the caller passed one: an explicit nil
+            -- env would replace _ENV and hide all globals from the chunk.
+            if select("#", ...) > 0 then
+                return text_load(chunk, chunkname, "t", ...)
+            end
+            return text_load(chunk, chunkname, "t")
+        end
+        loadfile = nil
+        dofile = nil
+        string.dump = nil
+        "##,
+    )
+    .set_name("=luna-sandbox")
+    .set_mode(ChunkMode::Text)
+    .exec()
+}
+
 async fn run_plugin(app: App, id: String, event: String, cancelled: Arc<AtomicBool>) -> Result<()> {
     let device = app.device.lock().await.clone();
     let led_count = app.led.settings.lock().await.count;
@@ -3166,6 +3194,7 @@ async fn run_plugin(app: App, id: String, event: String, cancelled: Arc<AtomicBo
             StdLib::TABLE | StdLib::STRING | StdLib::MATH | StdLib::UTF8,
             LuaOptions::default(),
         )?;
+        harden_lua(&lua)?;
         if enforce_user_lua_limits {
             let deadline = Instant::now()
                 + Duration::from_secs(lua_settings.max_runtime_seconds.clamp(1, 24 * 60 * 60));
@@ -4003,7 +4032,10 @@ async fn run_plugin(app: App, id: String, event: String, cancelled: Arc<AtomicBo
         globals.set("device", lua_device)?;
         let launch_path = manifest.launch.path(&manifest).to_string();
         let source = fs::read_to_string(root.join(&launch_path))?;
-        lua.load(&source).set_name(&launch_path).exec()?;
+        lua.load(&source)
+            .set_name(&launch_path)
+            .set_mode(ChunkMode::Text)
+            .exec()?;
         Ok(())
     })
     .await
@@ -6002,6 +6034,132 @@ const UI: &str = include_str!("../web/index.html");
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lua_sandbox_rejects_bytecode_and_filesystem_loaders() {
+        let lua = Lua::new_with(
+            StdLib::TABLE | StdLib::STRING | StdLib::MATH | StdLib::UTF8,
+            LuaOptions::default(),
+        )
+        .unwrap();
+        // Produce bytecode before hardening, as an attacker would craft it.
+        let bytecode = lua.load("return 42").into_function().unwrap().dump(false);
+        harden_lua(&lua).unwrap();
+        lua.globals()
+            .set("bytecode", lua.create_string(&bytecode).unwrap())
+            .unwrap();
+        let result: String = lua
+            .load(
+                r#"
+                assert(loadfile == nil and dofile == nil and string.dump == nil)
+                assert(("x").dump == nil)
+                for _, mode in ipairs({"b", "bt"}) do
+                    local f, err = load(bytecode, "x", mode)
+                    assert(f == nil and err:find("binary chunk"), tostring(err))
+                end
+                local f, err = load(bytecode)
+                assert(f == nil and err:find("binary chunk"), tostring(err))
+                -- Text chunks keep working, with and without an env.
+                answer = 41
+                assert(load("return answer + 1")() == 42)
+                assert(load("return answer", "x", "t", {answer = 7})() == 7)
+                local parts, i = {"return ", "5"}, 0
+                assert(load(function() i = i + 1; return parts[i] end)() == 5)
+                return "ok"
+                "#,
+            )
+            .eval()
+            .unwrap();
+        assert_eq!(result, "ok");
+        // The package entry itself is loaded as text only.
+        assert!(lua.load(&bytecode[..]).set_mode(ChunkMode::Text).exec().is_err());
+    }
+
+    #[test]
+    fn host_header_accepts_only_ip_literals_and_local_names() {
+        for host in [
+            "192.168.1.5", "192.168.1.5:8099", "8.8.8.8:80", "[::1]", "[::1]:8099",
+            "[fe80::1]:8099", "::1", "localhost", "localhost:8099", "LOCALHOST.",
+            "station.local", "yandex-mini.local:8099",
+        ] {
+            assert!(host_header_allowed(host), "{host} should be allowed");
+        }
+        for host in [
+            "evil.com", "evil.com:8099", "192.168.1.5.nip.io", "local", ".local",
+            "[::1", "[::1]x", "[evil.com]:80", "192.168.1.5:abc", "localhost.evil.com", "",
+        ] {
+            assert!(!host_header_allowed(host), "{host} should be rejected");
+        }
+    }
+
+    #[test]
+    fn origin_accepts_only_loopback_private_and_local_names() {
+        for origin in [
+            "http://127.0.0.1:8099", "http://localhost:8099", "http://10.1.2.3",
+            "http://172.16.0.1", "http://172.31.255.255", "http://192.168.1.10:8099",
+            "http://[::1]:8099", "http://[fd12::1]", "http://[::ffff:192.168.1.2]",
+            "https://station.local",
+        ] {
+            assert!(origin_allowed(origin), "{origin} should be allowed");
+        }
+        for origin in [
+            "null", "https://evil.com", "http://8.8.8.8", "http://172.32.0.1",
+            "http://[2001:db8::1]", "http://[::ffff:8.8.8.8]", "file:///tmp/x.html",
+            "http://localhost.evil.com", "garbage",
+        ] {
+            assert!(!origin_allowed(origin), "{origin} should be rejected");
+        }
+    }
+
+    #[tokio::test]
+    async fn browser_guard_blocks_cross_site_requests_only() {
+        use tower::ServiceExt;
+        let app = || {
+            Router::new()
+                .route("/api/x", get(|| async { "ok" }).post(|| async { "ok" }))
+                .layer(middleware::from_fn(browser_guard))
+        };
+        let status = |request: Request<Body>| async move {
+            app().oneshot(request).await.unwrap().status()
+        };
+        let base = || Request::builder().uri("/api/x").header("host", "192.168.1.5:8099");
+        // CLI: no Origin, JSON or empty body.
+        assert_eq!(status(base().method("POST").body(Body::empty()).unwrap()).await, StatusCode::OK);
+        assert_eq!(
+            status(base().method("POST").header("content-type", "application/json").body(Body::empty()).unwrap()).await,
+            StatusCode::OK
+        );
+        // DNS rebinding.
+        assert_eq!(
+            status(Request::builder().uri("/api/x").header("host", "rebind.evil.com:8099").body(Body::empty()).unwrap()).await,
+            StatusCode::FORBIDDEN
+        );
+        // Cross-site fetch / form.
+        assert_eq!(
+            status(base().method("POST").header("origin", "https://evil.com").body(Body::empty()).unwrap()).await,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            status(base().method("POST").header("origin", "null").body(Body::empty()).unwrap()).await,
+            StatusCode::FORBIDDEN
+        );
+        // Form-encoded mutation without the custom header (Origin omitted).
+        assert_eq!(
+            status(base().method("POST").header("content-type", "multipart/form-data; boundary=x").body(Body::empty()).unwrap()).await,
+            StatusCode::FORBIDDEN
+        );
+        // Built-in UI: same-origin, with the custom header.
+        assert_eq!(
+            status(
+                base().method("POST")
+                    .header("origin", "http://192.168.1.5:8099")
+                    .header("content-type", "multipart/form-data; boundary=x")
+                    .header("x-luna-local", "1")
+                    .body(Body::empty()).unwrap()
+            ).await,
+            StatusCode::OK
+        );
+    }
 
     #[test]
     fn invalid_clock_request_does_not_cancel_overlay() {
