@@ -12,3 +12,4 @@ pub use gateway::{
     InputGesture, LedBackend, LedTopology, MicrophoneBackend, MicrophoneDevice, StationSpec,
 };
 pub use quasar_microphone::create_microphone_backend as create_quasar_microphone_backend;
+pub use quasar_microphone::create_microphone_backend_with_channels as create_quasar_microphone_backend_with_channels;

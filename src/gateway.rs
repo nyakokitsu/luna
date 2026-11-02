@@ -1599,7 +1599,7 @@ fn detect_device(root: &Path, forced: Option<String>) -> DeviceProfile {
         features.push("audio.volume.alsa".into())
     }
     if crate::audio::available() {
-        features.push("audio.play.mediad".into())
+        features.push(if crate::audio::playback_pcm().is_some() { "audio.play.aplay" } else { "audio.play.mediad" }.into())
     }
     if bluetooth::available() {
         features.extend(["bluetooth.bluez".into(), "bluetooth.status".into()]);
@@ -2761,6 +2761,7 @@ fn file_player_remoting(method: u64, path: Option<&Path>) -> Vec<u8> {
 
 pub(crate) fn play_audio_file(path: &Path) -> Result<()> {
     crate::audio::validate_file(path)?;
+    if let Some(pcm) = crate::audio::playback_pcm() { return crate::audio::play_alsa(path, &pcm); }
     // FilePlayerCapability is owned by aliced. aliced forwards the actual
     // decoded audio to mediad; mediad is not the capability endpoint.
     let endpoint = ipc_endpoint("aliced")?;

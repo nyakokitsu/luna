@@ -4,16 +4,20 @@ log() { printf '[%s] %s\n' "$(date '+%H:%M:%S')" "$*" >&2; }
 
 VERSION=${LUNA_VERSION:-latest}
 PLATFORM=${LUNA_PLATFORM:-}
+BOOT_HOOK=1
+LISTEN=${LUNA_LISTEN:-127.0.0.1:8100}
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --platform|-p)
       [ "$#" -ge 2 ] || { echo "$1 requires a value" >&2; exit 2; }
       PLATFORM=$2; shift 2 ;;
+    --no-boot-hook) BOOT_HOOK=0; shift ;;
+    --listen) [ "$#" -ge 2 ] || exit 2; LISTEN=$2; shift 2 ;;
     --version)
       [ "$#" -ge 2 ] || { echo "$1 requires a value" >&2; exit 2; }
       VERSION=$2; shift 2 ;;
     --help|-h)
-      echo "Usage: $0 [VERSION] [--platform DEVICE]"; exit 0 ;;
+      echo "Usage: $0 [VERSION] [--platform DEVICE] [--no-boot-hook] [--listen HOST:PORT]"; exit 0 ;;
     -*)
       echo "Unknown option: $1" >&2; exit 2 ;;
     *)
@@ -30,6 +34,7 @@ done
 REPOSITORY=${LUNA_REPOSITORY:-https://github.com/nyakokitsu/luna}
 ROOT=${LUNA_REMOTE_ROOT:-/data/quazar/luna}
 SERIAL=${ADB_SERIAL:-}
+case "$LISTEN" in ''|*[!A-Za-z0-9_.:-]*) echo "invalid listen address" >&2; exit 2 ;; esac
 case "$ROOT" in ''|*[!A-Za-z0-9_./-]*) echo "invalid remote root" >&2; exit 2 ;; esac
 
 case "$VERSION" in
@@ -129,6 +134,21 @@ REMOTE="$TMP/remote.sh"
 cat >"$REMOTE" <<'REMOTE'
 set -eu
 root="$LUNA_ROOT"; binary="$root/bin/luna"; staged="$root/bin/luna.new"; pidfile="$root/luna.pid"; init=/etc/init.d/S99luna
+
+# Explicit /data-only installation for read-only retail firmware. The owner
+# supplies persistence through an existing, trusted boot mechanism.
+if [ "${LUNA_BOOT_HOOK:-1}" = 0 ]; then
+  mkdir -p "$root/bin" "$root/data"
+  chmod 0755 "$staged"
+  [ ! -f "$binary" ] || cp "$binary" "$root/bin/luna.previous"
+  mv "$staged" "$binary"
+  nohup "$binary" --listen "$LUNA_LISTEN" --data-dir "$root/data" >"$root/luna.log" 2>&1 </dev/null &
+  echo $! >"$pidfile"
+  sleep 1
+  kill -0 "$(cat "$pidfile")"
+  echo "Luna started without a system boot hook; configure owner-managed persistence."
+  exit 0
+fi
 mount -o remount,rw / 2>/dev/null || true
 mount | grep ' on / ' | grep -q '(rw' || { echo "root filesystem is not writable" >&2; exit 1; }
 mkdir -p "$root/bin" "$root/data"; chmod 0755 "$staged"
@@ -140,16 +160,16 @@ cat >"$init" <<'INIT'
 #!/bin/sh
 # Managed by Luna
 set -eu
-root=/data/quazar/luna; binary=$root/bin/luna; pidfile=$root/luna.pid; logfile=$root/luna.log
+root=__LUNA_ROOT__; binary=$root/bin/luna; pidfile=$root/luna.pid; logfile=$root/luna.log
 case "${1:-start}" in
 start)
   [ -x "$binary" ] || exit 0; mkdir -p "$root/data"
   if [ -f "$pidfile" ] && kill -0 "$(cat "$pidfile")" 2>/dev/null; then exit 0; fi
   rm -f "$pidfile"
   if command -v start-stop-daemon >/dev/null 2>&1; then
-    start-stop-daemon --start --background --make-pidfile --pidfile "$pidfile" --startas "$binary" -- --listen 0.0.0.0:8099 --data-dir "$root/data"
+    start-stop-daemon --start --background --make-pidfile --pidfile "$pidfile" --startas "$binary" -- --listen __LUNA_LISTEN__ --data-dir "$root/data"
   else
-    nohup "$binary" --listen 0.0.0.0:8099 --data-dir "$root/data" >"$logfile" 2>&1 </dev/null & echo $! >"$pidfile"
+    nohup "$binary" --listen __LUNA_LISTEN__ --data-dir "$root/data" >"$logfile" 2>&1 </dev/null & echo $! >"$pidfile"
   fi ;;
 stop)
   [ -f "$pidfile" ] && kill "$(cat "$pidfile")" 2>/dev/null || true; rm -f "$pidfile" ;;
@@ -161,8 +181,11 @@ chmod 0755 "$init"; "$init" start; sleep 1
 pid=$(cat "$pidfile" 2>/dev/null || true); case "$pid" in ''|*[!0-9]*) cat "$logfile" 2>/dev/null || true; exit 1 ;; esac
 kill -0 "$pid" 2>/dev/null || { cat "$logfile" 2>/dev/null || true; exit 1; }
 REMOTE
+sed "s|__LUNA_ROOT__|$ROOT|g; s|__LUNA_LISTEN__|$LISTEN|g" "$REMOTE" >"$REMOTE.configured"
+mv "$REMOTE.configured" "$REMOTE"
+adb -s "$SERIAL" shell "mkdir -p '$ROOT/bin'" >/dev/null
 log "Uploading $ASSET to $ROOT"
 adb -s "$SERIAL" push "$TMP/$ASSET" "$ROOT/bin/luna.new" >/dev/null
 log "Starting Luna on the station"
-adb -s "$SERIAL" shell "LUNA_ROOT='$ROOT' sh -s" <"$REMOTE"
-log "Luna installed: $DEVICE ($CODENAME), API port 8099"
+adb -s "$SERIAL" shell "LUNA_ROOT='$ROOT' LUNA_LISTEN='$LISTEN' LUNA_BOOT_HOOK='$BOOT_HOOK' sh -s" <"$REMOTE"
+log "Luna installed: $DEVICE ($CODENAME), API $LISTEN"

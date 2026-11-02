@@ -72,7 +72,13 @@ impl Framebuffer {
     fn encode(&self, frame: &[u8]) -> Vec<u8> {
         let mut pixels = Vec::with_capacity(self.frame_bytes);
         for led in frame.chunks_exact(3) {
-            pixels.extend_from_slice(led);
+            if self.bytes_per_pixel == 4 {
+                // Retail .50 FBIOGET_VSCREENINFO: R=16, G=8, B=0, A=24.
+                // Little-endian packed pixels therefore contain B, G, R, X.
+                pixels.extend_from_slice(&[led[2], led[1], led[0]]);
+            } else {
+                pixels.extend_from_slice(led);
+            }
             // 32-bpp framebuffers keep one unused high byte per pixel.
             if self.bytes_per_pixel == 4 {
                 pixels.push(0xff);
@@ -93,7 +99,11 @@ impl LedBackend for Framebuffer {
             .context("read Station 2 framebuffer")?;
         let mut last = self.last_frame.lock().unwrap();
         let ours = last.as_deref() == Some(&current[..]);
-        if !ours && current.iter().any(|value| *value != 0) {
+        if !ours
+            && current
+                .chunks_exact(self.bytes_per_pixel)
+                .any(|pixel| pixel[..3].iter().any(|value| *value != 0))
+        {
             *last = None;
             bail!("Station 2 framebuffer belongs to firmware or another indicator");
         }
@@ -169,8 +179,8 @@ mod tests {
         backend.show(&frame).unwrap();
         let written = fs::read(&fb).unwrap();
         assert_eq!(written.len(), LED_COUNT * 4);
-        assert_eq!(&written[..4], &[10, 20, 30, 0xff]);
-        assert_eq!(&written[LED_COUNT * 4 - 4..], &[10, 20, 30, 0xff]);
+        assert_eq!(&written[..4], &[30, 20, 10, 0xff]);
+        assert_eq!(&written[LED_COUNT * 4 - 4..], &[30, 20, 10, 0xff]);
         cleanup(&fb);
     }
 
@@ -197,6 +207,19 @@ mod tests {
         let frame = vec![200u8; LED_COUNT * 3];
         assert!(backend.show(&frame).is_err());
         assert_eq!(fs::read(&fb).unwrap(), foreign);
+        cleanup(&fb);
+    }
+
+    #[test]
+    fn blank_alpha_bytes_do_not_claim_the_framebuffer() {
+        let (fb, size, depth) = fixture("alpha", "89,1", "32");
+        let mut blank = vec![0u8; LED_COUNT * 4];
+        for pixel in blank.chunks_exact_mut(4) {
+            pixel[3] = 0xff;
+        }
+        fs::write(&fb, &blank).unwrap();
+        let backend = open(&fb, &size, &depth).unwrap();
+        backend.show(&vec![0; LED_COUNT * 3]).unwrap();
         cleanup(&fb);
     }
 }

@@ -145,22 +145,31 @@ fn is_luna_process(pid: u32) -> bool {
     let Ok(bytes) = std::fs::read(path) else {
         return false;
     };
-    let command = String::from_utf8_lossy(&bytes).replace('\0', " ");
-    let tokens: Vec<&str> = command.split_whitespace().collect();
-    if !tokens
-        .iter()
-        .any(|token| *token == "--listen" || token.starts_with("--listen="))
+    matches_luna_command(&bytes)
+}
+
+fn matches_luna_command(bytes: &[u8]) -> bool {
+    // /proc cmdline is an argv array, not a shell command. Searching every
+    // whitespace token also matched the parent `sh -c '... luna --listen ...'`
+    // and terminated the ADB session that was installing Luna.
+    let arguments: Vec<&[u8]> = bytes.split(|b| *b == 0).filter(|a| !a.is_empty()).collect();
+    let Some(executable) = arguments.first() else {
+        return false;
+    };
+    let Ok(executable) = std::str::from_utf8(executable) else {
+        return false;
+    };
+    let name = executable.rsplit('/').next().unwrap_or(executable);
+    if !(name == "luna" || name.starts_with("luna-"))
+        || name == "luna-evread"
+        || name == "luna-iohub2"
     {
         return false;
     }
-    // Only the main executable is eligible. Helpers such as luna-evread and
-    // luna-iohub2 must never be terminated by singleton takeover.
-    tokens.iter().any(|token| {
-        let name = token.rsplit('/').next().unwrap_or(token);
-        (name == "luna" || name.starts_with("luna-"))
-            && name != "luna-evread"
-            && name != "luna-iohub2"
-    })
+    arguments
+        .iter()
+        .skip(1)
+        .any(|argument| *argument == b"--listen" || argument.starts_with(b"--listen="))
 }
 
 fn terminate(pid: u32) -> Result<()> {
@@ -224,6 +233,29 @@ impl Drop for InstanceGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn takeover_matches_argv_zero_and_never_the_installing_shell() {
+        assert!(matches_luna_command(
+            b"/data/luna\0--listen\0127.0.0.1:8100\0"
+        ));
+        assert!(matches_luna_command(
+            b"/data/luna-pickle\0--listen=127.0.0.1:8100\0"
+        ));
+        assert!(!matches_luna_command(
+            b"/bin/sh\0-c\0nohup /data/luna --listen 127.0.0.1:8100\0"
+        ));
+        assert!(!matches_luna_command(
+            b"/bin/adb\0shell\0/data/luna\0--listen\0:8100\0"
+        ));
+        assert!(!matches_luna_command(
+            b"/data/luna-evread\0--listen\0:8100\0"
+        ));
+        assert!(!matches_luna_command(
+            b"/data/luna-iohub2\0--listen\0:8100\0"
+        ));
+        assert!(!matches_luna_command(b"/data/luna\0room\0--clear\0"));
+    }
 
     #[test]
     fn second_instance_is_rejected_when_owner_is_not_luna() {

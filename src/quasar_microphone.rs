@@ -9,21 +9,30 @@ use std::{
 };
 
 const CONFIG: &str = "/system/vendor/quasar/quasar.cfg";
-const SERVICE: &str = "iohub_clients";
+const SERVICE: &str = "yio_audio";
 const CHANNELS_FIELD: u32 = 158;
 const REQUEST_FIELD: u32 = 159;
-const RAW_MIC: u64 = 1;
 const RATE: u32 = 16_000;
 
 pub fn create_microphone_backend() -> Option<Box<dyn MicrophoneBackend>> {
-    Some(Box::new(IoHubMicrophone))
+    create_microphone_backend_with_channels(4)
 }
 
-struct IoHubMicrophone;
+pub fn create_microphone_backend_with_channels(
+    channels: usize,
+) -> Option<Box<dyn MicrophoneBackend>> {
+    (1..=8)
+        .contains(&channels)
+        .then(|| Box::new(IoHubMicrophone { channels }) as Box<dyn MicrophoneBackend>)
+}
+
+struct IoHubMicrophone {
+    channels: usize,
+}
 
 impl IoHubMicrophone {
     fn available(&self) -> bool {
-        Path::new("/system/vendor/quasar/maind").is_file() && Path::new(CONFIG).is_file()
+        Path::new("/system/vendor/quasar/maind").is_file() && self.endpoint().is_ok()
     }
 
     fn endpoint(&self) -> Result<String> {
@@ -32,7 +41,8 @@ impl IoHubMicrophone {
             .get(SERVICE)
             .and_then(|v| v.get("port"))
             .and_then(serde_json::Value::as_u64)
-            .context("iohub_clients.port is not configured")?;
+            .filter(|port| (1..=65535).contains(port))
+            .context("yio_audio.port is not configured")?;
         Ok(format!("127.0.0.1:{port}"))
     }
 
@@ -53,7 +63,9 @@ impl IoHubMicrophone {
         let mut stream = TcpStream::connect(self.endpoint()?).context("connect Quasar IOHub")?;
         stream.set_read_timeout(Some(Duration::from_secs(u64::from(seconds) + 3)))?;
         stream.set_write_timeout(Some(Duration::from_secs(2)))?;
-        frame_write(&mut stream, &request(&request_id, 4))?;
+        // request_raw (4) selects only the first RAW channel on these firmwares.
+        // request_all (2), followed by RAW filtering, exposes every microphone.
+        frame_write(&mut stream, &request(&request_id, 2))?;
         let deadline = std::time::Instant::now() + Duration::from_secs(u64::from(seconds));
         let result = (|| loop {
             if cancelled.load(Ordering::Relaxed) {
@@ -83,7 +95,7 @@ impl MicrophoneBackend for IoHubMicrophone {
         if !self.available() {
             bail!("Quasar microphone capture is unavailable")
         }
-        Ok((0..4)
+        Ok((0..self.channels)
             .map(|i| MicrophoneDevice {
                 id: format!("raw_mic_{i}"),
                 name: format!("Raw microphone {}", i + 1),
@@ -97,7 +109,10 @@ impl MicrophoneBackend for IoHubMicrophone {
         if !(1..=30).contains(&seconds) {
             bail!("microphone capture duration must be 1..=30 seconds")
         }
-        let selected = device.map(parse_id).transpose()?.unwrap_or(0);
+        let selected = device
+            .map(|value| parse_id(value, self.channels))
+            .transpose()?
+            .unwrap_or(0);
         let mut pcm = Vec::new();
         let mut found = false;
         self.capture(seconds, cancelled, &mut |channels| {
@@ -126,12 +141,12 @@ struct Channel {
     rate: u32,
 }
 
-fn parse_id(value: &str) -> Result<usize> {
+fn parse_id(value: &str, count: usize) -> Result<usize> {
     let index = value
         .strip_prefix("raw_mic_")
         .context("invalid microphone device ID")?
         .parse::<usize>()?;
-    if index >= 4 {
+    if index >= count {
         bail!("unknown microphone device")
     }
     Ok(index)
@@ -154,6 +169,11 @@ fn request(id: &str, command: u32) -> Vec<u8> {
     bytes(command, &[], &mut c);
     let mut m = Vec::new();
     bytes(1, id.as_bytes(), &mut m);
+    // .50 uses payload/type; old firmware uses a message field. Each schema
+    // ignores the other's fields, allowing one request without duplicate captures.
+    bytes(252, &c, &mut m);
+    varint(253 << 3, &mut m);
+    varint(u64::from(REQUEST_FIELD), &mut m);
     bytes(REQUEST_FIELD, &c, &mut m);
     m
 }
@@ -231,23 +251,34 @@ fn skip(data: &[u8], pos: &mut usize, wire: u8) -> Result<()> {
 fn parse_channels(data: &[u8]) -> Result<Vec<Channel>> {
     let mut pos = 0;
     let mut result = Vec::new();
+    let mut modern_type = None;
+    let mut modern_payload = None;
     while pos < data.len() {
         let (field, wire) = key(data, &mut pos)?;
         if field == CHANNELS_FIELD && wire == 2 {
-            result.extend(parse_channel_list(read_bytes(data, &mut pos)?)?);
+            result.extend(parse_channel_list(read_bytes(data, &mut pos)?, 0)?);
+        } else if field == 253 && wire == 0 {
+            modern_type = Some(read_varint(data, &mut pos)?);
+        } else if field == 252 && wire == 2 {
+            modern_payload = Some(read_bytes(data, &mut pos)?);
         } else {
             skip(data, &mut pos, wire)?;
         }
     }
+    if modern_type == Some(u64::from(CHANNELS_FIELD)) {
+        if let Some(payload) = modern_payload {
+            result.extend(parse_channel_list(payload, 1)?);
+        }
+    }
     Ok(result)
 }
-fn parse_channel_list(data: &[u8]) -> Result<Vec<Channel>> {
+fn parse_channel_list(data: &[u8], raw_type: u64) -> Result<Vec<Channel>> {
     let mut pos = 0;
     let mut result = Vec::new();
     while pos < data.len() {
         let (field, wire) = key(data, &mut pos)?;
         if field == 1 && wire == 2 {
-            if let Some(c) = parse_channel(read_bytes(data, &mut pos)?)? {
+            if let Some(c) = parse_channel(read_bytes(data, &mut pos)?, raw_type)? {
                 result.push(c);
             }
         } else {
@@ -256,7 +287,7 @@ fn parse_channel_list(data: &[u8]) -> Result<Vec<Channel>> {
     }
     Ok(result)
 }
-fn parse_channel(data: &[u8]) -> Result<Option<Channel>> {
+fn parse_channel(data: &[u8], raw_type: u64) -> Result<Option<Channel>> {
     let mut pos = 0;
     let mut kind = None;
     let mut payload = Vec::new();
@@ -270,7 +301,7 @@ fn parse_channel(data: &[u8]) -> Result<Option<Channel>> {
             (_, w) => skip(data, &mut pos, w)?,
         }
     }
-    if kind != Some(RAW_MIC) {
+    if kind.unwrap_or(0) != raw_type {
         return Ok(None);
     }
     Ok(Some(Channel {
@@ -317,4 +348,41 @@ fn wav(pcm: &[u8]) -> Vec<u8> {
     out.extend_from_slice(&n.to_le_bytes());
     out.extend_from_slice(pcm);
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn raw_zero_is_decoded_and_vqe_one_is_not_a_raw_microphone() {
+        // Literal protobuf enum values, independent of the implementation constant.
+        let raw = [8, 0, 26, 4, 1, 0, 2, 0, 56, 128, 125];
+        let parsed = parse_channel(&raw, 0).unwrap().unwrap();
+        assert_eq!(parsed.rate, 16_000);
+        assert_eq!(parsed.data, [1, 0, 2, 0]);
+        let mut vqe = raw;
+        vqe[1] = 1;
+        assert!(parse_channel(&vqe, 0).unwrap().is_none());
+        assert!(parse_channel(&raw[2..], 0).unwrap().is_some());
+    }
+    #[test]
+    fn modern_envelope_uses_raw_one_and_filters_speaker_and_vqe_channels() {
+        let raw = [8, 1, 26, 4, 1, 0, 2, 0, 56, 128, 125];
+        let mut payload = Vec::new();
+        bytes(1, &raw, &mut payload);
+        for kind in [4, 6] {
+            let mut channel = raw;
+            channel[1] = kind;
+            bytes(1, &channel, &mut payload);
+        }
+        let mut message = Vec::new();
+        bytes(252, &payload, &mut message);
+        varint(253 << 3, &mut message);
+        varint(158, &mut message);
+        let channels = parse_channels(&message).unwrap();
+        assert_eq!(channels.len(), 1);
+        assert_eq!(channels[0].data, [1, 0, 2, 0]);
+        assert!(parse_id("raw_mic_3", 3).is_err());
+        assert_eq!(parse_id("raw_mic_3", 4).unwrap(), 3);
+    }
 }

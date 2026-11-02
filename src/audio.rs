@@ -5,8 +5,43 @@ const MAX_AUDIO_BYTES: usize = 64 * 1024 * 1024;
 const MAX_PLAYBACK_SECONDS: u64 = 600;
 
 pub fn available() -> bool {
+    if playback_pcm().is_some() {
+        return std::env::var_os("PATH")
+            .map(|p| std::env::split_paths(&p).any(|d| d.join("aplay").is_file()))
+            .unwrap_or(false);
+    }
     Path::new("/system/vendor/quasar/maind").is_file()
         && Path::new("/system/vendor/quasar/quasar.cfg").is_file()
+}
+
+pub(crate) fn playback_pcm() -> Option<String> {
+    std::env::var("LUNA_AUDIO_PCM")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+}
+
+pub(crate) fn play_alsa(path: &Path, pcm: &str) -> Result<()> {
+    let mut child = std::process::Command::new("aplay")
+        .args(["-q", "-D", pcm])
+        .arg(path)
+        .spawn()
+        .context("start ALSA playback")?;
+    let deadline =
+        std::time::Instant::now() + std::time::Duration::from_secs(MAX_PLAYBACK_SECONDS + 10);
+    loop {
+        if let Some(status) = child.try_wait().context("wait for ALSA playback")? {
+            if !status.success() {
+                bail!("ALSA playback failed: {status}")
+            }
+            return Ok(());
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!("ALSA playback timed out")
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
 }
 
 fn validate_wav(bytes: &[u8]) -> Result<()> {
