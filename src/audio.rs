@@ -24,9 +24,34 @@ pub(crate) fn play_alsa(path: &Path, pcm: &str) -> Result<()> {
     play_alsa_cancel(path, pcm, &std::sync::atomic::AtomicBool::new(false))
 }
 
-pub(crate) fn play_alsa_cancel(path: &Path, pcm: &str, cancelled: &std::sync::atomic::AtomicBool) -> Result<()> {
+fn terminate_alsa(child: &mut std::process::Child) {
+    // Let ALSA detach dmix shared memory before escalating. SIGKILL can leave
+    // an unused segment whose stale playback pointers block the next client.
+    #[cfg(unix)]
+    unsafe {
+        libc::kill(child.id() as i32, libc::SIGTERM);
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    while std::time::Instant::now() < deadline {
+        if matches!(child.try_wait(), Ok(Some(_))) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+pub(crate) fn play_alsa_cancel(
+    path: &Path,
+    pcm: &str,
+    cancelled: &std::sync::atomic::AtomicBool,
+) -> Result<()> {
     use std::sync::atomic::Ordering;
-    if cancelled.load(Ordering::Relaxed) { bail!("playback cancelled") }
+    if cancelled.load(Ordering::Relaxed) {
+        bail!("playback cancelled")
+    }
+    let duration = wav_duration(&fs::read(path)?)?;
     let mut child = std::process::Command::new("aplay")
         .args(["-q", "-D", pcm])
         .arg(path)
@@ -34,11 +59,11 @@ pub(crate) fn play_alsa_cancel(path: &Path, pcm: &str, cancelled: &std::sync::at
         .stderr(std::process::Stdio::null())
         .spawn()
         .context("start ALSA playback")?;
-    let deadline =
-        std::time::Instant::now() + std::time::Duration::from_secs(MAX_PLAYBACK_SECONDS + 10);
+    let deadline = std::time::Instant::now() + duration + std::time::Duration::from_secs(5);
     loop {
         if cancelled.load(Ordering::Relaxed) {
-            let _ = child.kill(); let _ = child.wait(); bail!("playback cancelled")
+            terminate_alsa(&mut child);
+            bail!("playback cancelled")
         }
         if let Some(status) = child.try_wait().context("wait for ALSA playback")? {
             if !status.success() {
@@ -47,8 +72,7 @@ pub(crate) fn play_alsa_cancel(path: &Path, pcm: &str, cancelled: &std::sync::at
             return Ok(());
         }
         if std::time::Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
+            terminate_alsa(&mut child);
             bail!("ALSA playback timed out")
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
@@ -56,6 +80,10 @@ pub(crate) fn play_alsa_cancel(path: &Path, pcm: &str, cancelled: &std::sync::at
 }
 
 pub(crate) fn validate_wav(bytes: &[u8]) -> Result<()> {
+    wav_duration(bytes).map(|_| ())
+}
+
+fn wav_duration(bytes: &[u8]) -> Result<std::time::Duration> {
     if bytes.len() > MAX_AUDIO_BYTES {
         bail!("audio file exceeds 64 MiB")
     }
@@ -106,7 +134,9 @@ pub(crate) fn validate_wav(bytes: &[u8]) -> Result<()> {
     if data_len.div_ceil(bytes_per_second) > MAX_PLAYBACK_SECONDS {
         bail!("audio playback is limited to 600 seconds")
     }
-    Ok(())
+    Ok(std::time::Duration::from_millis(
+        (data_len * 1000).div_ceil(bytes_per_second),
+    ))
 }
 
 pub(crate) fn validate_file(path: &Path) -> Result<()> {
@@ -121,5 +151,29 @@ mod tests {
     #[test]
     fn rejects_non_wav_audio() {
         assert!(validate_wav(b"not audio").is_err());
+    }
+    #[test]
+    fn deadline_tracks_the_actual_audio_not_ten_minutes() {
+        let duration = super::wav_duration(include_bytes!("../assets/audio-test.wav")).unwrap();
+        assert!(duration.as_secs_f64() > 3.9 && duration.as_secs_f64() < 4.1);
+    }
+    #[cfg(unix)]
+    #[test]
+    fn cancellation_allows_the_player_to_release_resources() {
+        let root = std::env::temp_dir().join(format!("luna-player-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let marker = root.join("closed");
+        let ready = root.join("ready");
+        let mut child=std::process::Command::new("/bin/sh").args(["-c","trap 'echo closed > \"$1\"; exit 0' TERM; echo ready > \"$2\"; while :; do :; done","player"])
+            .arg(&marker).arg(&ready).spawn().unwrap();
+        for _ in 0..100 {
+            if ready.exists() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        super::terminate_alsa(&mut child);
+        assert_eq!(std::fs::read_to_string(marker).unwrap().trim(), "closed");
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
