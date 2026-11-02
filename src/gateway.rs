@@ -1758,29 +1758,12 @@ fn configured_light_sensor(name: &str) -> Result<PathBuf> {
 enum ClockLayout {
     Mini2(String),
     Cucumber(String),
-    /// Yandex Station Lite 2 (`plum`). Same `{prefix}clock{segment}` shape as
-    /// Mini2, but positions are 0-based and the separator is three separate
-    /// segments instead of PLUS/MINUS markers.
-    Plum(String),
 }
 const CUCUMBER_EXTRA_SEGMENTS: [&str; 14] = [
     "H1", "H2", "L1", "L2", "M1", "M2", "P1", "P2", "P4", "P5", "Q1", "Q2", "Q4", "Q5",
 ];
 impl ClockLayout {
     fn segments(&self) -> Vec<String> {
-        // plum: four positions 0..3, eight parts A..H, and a three-segment
-        // separator (DH/DM/DL) instead of PLUS1/PLUS2/MINUS. DEGREE is the
-        // standalone marker next to the digits.
-        if let ClockLayout::Plum(_) = self {
-            let mut segments = Vec::new();
-            for position in 0..=3 {
-                for part in ["A", "B", "C", "D", "E", "F", "G", "H"] {
-                    segments.push(format!("{part}{position}"));
-                }
-            }
-            segments.extend(["DEGREE".into(), "DH".into(), "DM".into(), "DL".into()]);
-            return segments;
-        }
         let mut segments = Vec::new();
         for position in 1..=4 {
             for part in ["A", "B", "C", "D", "E", "F", "G"] {
@@ -1794,13 +1777,12 @@ impl ClockLayout {
                 segments.push("DEGREE".into());
                 segments.extend(CUCUMBER_EXTRA_SEGMENTS.iter().map(|x| x.to_string()));
             }
-            ClockLayout::Plum(_) => unreachable!(),
         }
         segments
     }
     fn path(&self, segment: &str) -> PathBuf {
         match self {
-            ClockLayout::Mini2(prefix) | ClockLayout::Plum(prefix) => {
+            ClockLayout::Mini2(prefix) => {
                 Path::new("/sys/class/leds").join(format!("{prefix}clock{segment}/brightness"))
             }
             ClockLayout::Cucumber(prefix) => {
@@ -1847,12 +1829,6 @@ fn probe_clock_layout() -> Option<ClockLayout> {
         .flatten()
         .filter_map(|entry| entry.file_name().into_string().ok())
         .collect::<Vec<_>>();
-    // plum is detected first: its names also end with "clockA1", so the Mini2
-    // probe below would otherwise claim it and then fail `complete()`.
-    let plum = names
-        .iter()
-        .filter_map(|name| name.strip_suffix("clockA0"))
-        .map(|prefix| ClockLayout::Plum(prefix.into()));
     let upper = names
         .iter()
         .filter_map(|name| name.strip_suffix("clockA1"))
@@ -1861,9 +1837,7 @@ fn probe_clock_layout() -> Option<ClockLayout> {
         .iter()
         .filter_map(|name| name.strip_suffix("white:clock-a1"))
         .map(|prefix| ClockLayout::Cucumber(prefix.into()));
-    plum.chain(upper)
-        .chain(cucumber)
-        .find(ClockLayout::complete)
+    upper.chain(cucumber).find(ClockLayout::complete)
 }
 fn clock_segments() -> Vec<String> {
     clock_layout()
@@ -2937,29 +2911,14 @@ fn clock_time(value: &str, brightness: u8) -> Result<()> {
         (b'9', &["A", "B", "C", "D", "F", "G"]),
     ]);
     let mut segments = HashMap::new();
-    let layout = clock_layout().context("segment clock is not available")?;
-    // plum numbers its positions from 0 and has no PLUS/MINUS markers: its
-    // colon is the upper and lower halves of the separator.
-    let base = if matches!(layout, ClockLayout::Plum(_)) {
-        0
-    } else {
-        1
-    };
+    clock_layout().context("segment clock is not available")?;
     for (index, digit) in [bytes[0], bytes[1], bytes[3], bytes[4]].iter().enumerate() {
         for part in digits.get(digit).context("invalid clock digit")?.iter() {
-            segments.insert(format!("{part}{}", index + base), brightness);
+            segments.insert(format!("{part}{}", index + 1), brightness);
         }
     }
-    match layout {
-        ClockLayout::Plum(_) => {
-            segments.insert("DH".into(), brightness);
-            segments.insert("DL".into(), brightness);
-        }
-        _ => {
-            segments.insert("PLUS1".into(), brightness);
-            segments.insert("PLUS2".into(), brightness);
-        }
-    }
+    segments.insert("PLUS1".into(), brightness);
+    segments.insert("PLUS2".into(), brightness);
     clock_write(&segments)
 }
 fn validate_id(s: &str) -> Result<()> {
@@ -5738,6 +5697,14 @@ pub async fn run_with_station(station: Option<StationSpec>) -> Result<()> {
             {
                 continue;
             }
+            // A station crate may list the clock unconditionally; only report
+            // it when the backend actually detected a display.
+            if *capability == "display.clock.segment.v1"
+                && clock.is_none()
+                && !clock_available()
+            {
+                continue;
+            }
             if !device.features.iter().any(|feature| feature == capability) {
                 device.features.push((*capability).into());
             }
@@ -6214,9 +6181,9 @@ mod tests {
     fn invalid_clock_request_does_not_cancel_overlay() {
         let before = CLOCK_TEXT_EPOCH.load(Ordering::SeqCst);
         for request in [
-            ClockRequest { time: None, brightness: None, segments: None },
-            ClockRequest { time: Some("invalid".into()), brightness: None, segments: None },
-            ClockRequest { time: None, brightness: None, segments: Some(HashMap::from([("INVALID".into(), 100)])) },
+            ClockRequest { time: None, brightness: None, segments: None, off: false },
+            ClockRequest { time: Some("invalid".into()), brightness: None, segments: None, off: false },
+            ClockRequest { time: None, brightness: None, segments: Some(HashMap::from([("INVALID".into(), 100)])), off: false },
         ] {
             assert!(put_clock_request(None, request).is_err());
             assert_eq!(CLOCK_TEXT_EPOCH.load(Ordering::SeqCst), before);
@@ -6238,7 +6205,6 @@ mod tests {
         assert!(clock_text_available(false, Some(&ClockLayout::Cucumber("test".into()))));
         assert!(!clock_text_available(true, Some(&ClockLayout::Cucumber("test".into()))));
         assert!(!clock_text_available(false, Some(&ClockLayout::Mini2("test".into()))));
-        assert!(!clock_text_available(false, Some(&ClockLayout::Plum("test".into()))));
         assert!(!clock_text_available(false, None));
     }
 
