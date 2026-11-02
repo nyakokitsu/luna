@@ -44,6 +44,8 @@ mod bluetooth;
 mod yam_binary;
 #[path = "dependencies.rs"]
 mod dependencies;
+#[path = "quasar_volume.rs"]
+mod quasar_volume;
 
 #[derive(Parser)]
 struct Args {
@@ -3400,13 +3402,15 @@ async fn run_plugin(app: App, id: String, event: String, cancelled: Arc<AtomicBo
                     if percent > 100 {
                         return Err(mlua::Error::external("volume must be 0..100"));
                     };
-                    set_volume_backend(percent, false).map_err(mlua::Error::external)
+                    set_volume_backend(percent, false)
+                        .map(|_| ())
+                        .map_err(mlua::Error::external)
                 })?,
             )?;
             volume.set(
                 "get",
                 lua.create_function(|_, ()| {
-                    amixer_output(&["get".into(), "Master".into()]).map_err(mlua::Error::external)
+                    current_volume().map_err(mlua::Error::external)
                 })?,
             )?;
             api.set("volume", volume)?;
@@ -5019,20 +5023,29 @@ fn set_volume_via_maind(percent: u8, muted: bool) -> Result<()> {
     write_ipc_frame(&mut stream, &volume_manager_message(percent, muted))
 }
 
-fn set_volume_backend(percent: u8, muted: bool) -> Result<()> {
-    // Prefer maind/VQE so Alice, the touch sensor and Luna share one state.
-    // Some older Mini firmware advertises volume_manager.port but does not
-    // actually expose the listener; retain ALSA as a compatibility fallback.
+fn current_volume() -> Result<u8> {
+    // Quasar's logical level is the one the buttons, the ring and Alice use.
+    if let Ok(percent) = quasar_volume::get() {
+        return Ok(percent);
+    }
+    amixer_volume()
+}
+
+fn set_volume_backend(percent: u8, muted: bool) -> Result<u8> {
+    // Quasar keeps the logical level that the buttons, the ring and Alice use.
+    // Only its native VolumeSet updates it, so prefer that path on verified
+    // firmware and fall back to maind/VQE, then ALSA.
+    if !muted {
+        if let Ok(applied) = quasar_volume::set(percent) {
+            return Ok(applied);
+        }
+    }
     if set_volume_via_maind(percent, muted).is_ok() {
-        return Ok(());
+        return amixer_volume();
     }
     // amixer takes the level and the mute switch as separate arguments;
     // "42% unmute" as a single argv entry is rejected with "Invalid command!".
-    amixer_output(&[
-        "set".into(),
-        "Master".into(),
-        format!("{percent}%"),
-    ])?;
+    amixer_output(&["set".into(), "Master".into(), format!("{percent}%")])?;
     // Not every control carries a playback switch (softvol without one is
     // common on emulated and minimal firmware), so apply the switch best-effort.
     if let Err(error) = amixer_output(&[
@@ -5042,7 +5055,7 @@ fn set_volume_backend(percent: u8, muted: bool) -> Result<()> {
     ]) {
         tracing::debug!(%error, "amixer mute switch unavailable");
     }
-    Ok(())
+    amixer_volume()
 }
 
 async fn get_bluetooth_status() -> Result<Json<serde_json::Value>, ApiError> {
@@ -5092,7 +5105,7 @@ async fn post_bluetooth_action(
 
 async fn get_volume() -> Result<Json<VolumeResponse>, ApiError> {
     Ok(Json(VolumeResponse {
-        percent: amixer_volume()?,
+        percent: current_volume()?,
     }))
 }
 
@@ -5100,9 +5113,8 @@ async fn set_volume(Json(request): Json<VolumeRequest>) -> Result<Json<VolumeRes
     if request.percent > 100 {
         return Err(ApiError(anyhow!("volume must be 0..100")));
     }
-    set_volume_backend(request.percent, false)?;
     Ok(Json(VolumeResponse {
-        percent: amixer_volume()?,
+        percent: set_volume_backend(request.percent, false)?,
     }))
 }
 
@@ -5116,11 +5128,10 @@ async fn change_volume(
     if step == 0 || step > 100 {
         return Err(ApiError(anyhow!("volume step must be 1..100")));
     }
-    let current = amixer_volume()? as i16;
-    let next = (current + direction * step as i16).clamp(0, 100) as u8;
-    set_volume_backend(next, false)?;
+    let current = current_volume()? as i16;
+    let next = (current + direction * i16::from(step)).clamp(0, 100) as u8;
     Ok(Json(VolumeResponse {
-        percent: amixer_volume()?,
+        percent: set_volume_backend(next, false)?,
     }))
 }
 
@@ -5137,9 +5148,9 @@ async fn volume_down(
 }
 
 async fn set_mute(muted: bool) -> Result<Json<VolumeResponse>, ApiError> {
-    set_volume_backend(amixer_volume()?, muted)?;
+    let percent = current_volume()?;
     Ok(Json(VolumeResponse {
-        percent: amixer_volume()?,
+        percent: set_volume_backend(percent, muted)?,
     }))
 }
 
