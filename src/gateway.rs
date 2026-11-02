@@ -11,7 +11,7 @@ use axum::{
 };
 use clap::{Parser, Subcommand};
 use flate2::read::GzDecoder;
-use mlua::{HookTriggers, Lua, LuaOptions, LuaSerdeExt, StdLib, VmState};
+use mlua::{ChunkMode, HookTriggers, Lua, LuaOptions, LuaSerdeExt, StdLib, VmState};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -3093,6 +3093,34 @@ fn lua_callable_with_availability(
     Ok(table)
 }
 
+/// mlua always opens the base library, even in safe mode. Close the parts of it
+/// that reach past the sandbox before any package code runs:
+/// - binary chunks: Lua does not verify bytecode, so crafted bytecode can
+///   corrupt memory and run native code in the (root) daemon. `load` is kept
+///   for text only, and `string.dump` goes because nothing can load its output.
+/// - `loadfile` / `dofile`: they read and run arbitrary filesystem paths.
+fn harden_lua(lua: &Lua) -> mlua::Result<()> {
+    lua.load(
+        r##"
+        local text_load = load
+        load = function(chunk, chunkname, _mode, ...)
+            -- Forward env only when the caller passed one: an explicit nil
+            -- env would replace _ENV and hide all globals from the chunk.
+            if select("#", ...) > 0 then
+                return text_load(chunk, chunkname, "t", ...)
+            end
+            return text_load(chunk, chunkname, "t")
+        end
+        loadfile = nil
+        dofile = nil
+        string.dump = nil
+        "##,
+    )
+    .set_name("=luna-sandbox")
+    .set_mode(ChunkMode::Text)
+    .exec()
+}
+
 async fn run_plugin(app: App, id: String, event: String, cancelled: Arc<AtomicBool>) -> Result<()> {
     let device = app.device.lock().await.clone();
     let led_count = app.led.settings.lock().await.count;
@@ -3128,6 +3156,7 @@ async fn run_plugin(app: App, id: String, event: String, cancelled: Arc<AtomicBo
             StdLib::TABLE | StdLib::STRING | StdLib::MATH | StdLib::UTF8,
             LuaOptions::default(),
         )?;
+        harden_lua(&lua)?;
         if enforce_user_lua_limits {
             let deadline = Instant::now()
                 + Duration::from_secs(lua_settings.max_runtime_seconds.clamp(1, 24 * 60 * 60));
@@ -3967,7 +3996,10 @@ async fn run_plugin(app: App, id: String, event: String, cancelled: Arc<AtomicBo
         globals.set("device", lua_device)?;
         let launch_path = manifest.launch.path(&manifest).to_string();
         let source = fs::read_to_string(root.join(&launch_path))?;
-        lua.load(&source).set_name(&launch_path).exec()?;
+        lua.load(&source)
+            .set_name(&launch_path)
+            .set_mode(ChunkMode::Text)
+            .exec()?;
         Ok(())
     })
     .await
@@ -6101,6 +6133,46 @@ const UI: &str = include_str!("../web/index.html");
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lua_sandbox_rejects_bytecode_and_filesystem_loaders() {
+        let lua = Lua::new_with(
+            StdLib::TABLE | StdLib::STRING | StdLib::MATH | StdLib::UTF8,
+            LuaOptions::default(),
+        )
+        .unwrap();
+        // Produce bytecode before hardening, as an attacker would craft it.
+        let bytecode = lua.load("return 42").into_function().unwrap().dump(false);
+        harden_lua(&lua).unwrap();
+        lua.globals()
+            .set("bytecode", lua.create_string(&bytecode).unwrap())
+            .unwrap();
+        let result: String = lua
+            .load(
+                r#"
+                assert(loadfile == nil and dofile == nil and string.dump == nil)
+                assert(("x").dump == nil)
+                for _, mode in ipairs({"b", "bt"}) do
+                    local f, err = load(bytecode, "x", mode)
+                    assert(f == nil and err:find("binary chunk"), tostring(err))
+                end
+                local f, err = load(bytecode)
+                assert(f == nil and err:find("binary chunk"), tostring(err))
+                -- Text chunks keep working, with and without an env.
+                answer = 41
+                assert(load("return answer + 1")() == 42)
+                assert(load("return answer", "x", "t", {answer = 7})() == 7)
+                local parts, i = {"return ", "5"}, 0
+                assert(load(function() i = i + 1; return parts[i] end)() == 5)
+                return "ok"
+                "#,
+            )
+            .eval()
+            .unwrap();
+        assert_eq!(result, "ok");
+        // The package entry itself is loaded as text only.
+        assert!(lua.load(&bytecode[..]).set_mode(ChunkMode::Text).exec().is_err());
+    }
 
     #[test]
     fn host_header_accepts_only_ip_literals_and_local_names() {
