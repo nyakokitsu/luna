@@ -1,5 +1,5 @@
+use crate::gateway::{MicrophoneBackend, MicrophoneDevice};
 use anyhow::{bail, Context, Result};
-use luna::{MicrophoneBackend, MicrophoneDevice};
 use std::{
     io::{Read, Write},
     net::TcpStream,
