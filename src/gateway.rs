@@ -6007,9 +6007,9 @@ mod tests {
     fn invalid_clock_request_does_not_cancel_overlay() {
         let before = CLOCK_TEXT_EPOCH.load(Ordering::SeqCst);
         for request in [
-            ClockRequest { time: None, brightness: None, segments: None },
-            ClockRequest { time: Some("invalid".into()), brightness: None, segments: None },
-            ClockRequest { time: None, brightness: None, segments: Some(HashMap::from([("INVALID".into(), 100)])) },
+            ClockRequest { time: None, brightness: None, segments: None, off: false },
+            ClockRequest { time: Some("invalid".into()), brightness: None, segments: None, off: false },
+            ClockRequest { time: None, brightness: None, segments: Some(HashMap::from([("INVALID".into(), 100)])), off: false },
         ] {
             assert!(put_clock_request(None, request).is_err());
             assert_eq!(CLOCK_TEXT_EPOCH.load(Ordering::SeqCst), before);
