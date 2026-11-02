@@ -874,6 +874,7 @@ endpoint безопасен для standalone-установки: если YAM �
 
 ```sh
 curl -X POST "$BASE/plugins" \
+  -H 'X-Luna-Local: 1' \
   -F 'package=@plugin.yap'
 ```
 
@@ -1105,6 +1106,13 @@ local url = register.customweb("web/index.html")
 
 - Для локального тестирования используйте `--listen 127.0.0.1:8100`.
 - `0.0.0.0` открывает UI и API всем узлам доступной сети.
+- Запросы из браузера с чужих сайтов отклоняются (`403`): `Host` должен быть
+  IP-адресом, `localhost` или `*.local` (защита от DNS rebinding), а `Origin`,
+  если он передан, — loopback, частной сетью (`10/8`, `172.16/12`,
+  `192.168/16`, `fc00::/7`), `localhost` или `*.local`. Изменяющие запросы с
+  типом тела `multipart/form-data`, `application/x-www-form-urlencoded` или
+  `text/plain` требуют заголовок `X-Luna-Local: 1`. JSON-запросы и запросы без
+  тела из curl и скриптов работают без изменений.
 - Плагины и runtime-пакеты получают доступ только к API, разрешённому их
   manifest permissions.
 - Автообновление Luna из GitHub по умолчанию отключено; его можно включить в

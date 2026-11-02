@@ -28,6 +28,9 @@ tar = "0.4"
 libc = "0.2"
 notify = "8"
 
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+
 [workspace]
 resolver = "2"
 members = [

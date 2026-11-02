@@ -3,7 +3,8 @@ use anyhow::{anyhow, bail, Context, Result};
 use axum::{
     body::Body,
     extract::{DefaultBodyLimit, Multipart, Path as AxumPath, Query, State},
-    http::{HeaderMap, StatusCode},
+    http::{header, HeaderMap, Method, Request, StatusCode},
+    middleware::{self, Next},
     response::{Html, IntoResponse, Response},
     routing::{delete, get, post, put},
     Json, Router,
@@ -5949,6 +5950,7 @@ pub async fn run_with_station(station: Option<StationSpec>) -> Result<()> {
     }
     let router = router
         .layer(DefaultBodyLimit::max(67 * 1024 * 1024))
+        .layer(middleware::from_fn(browser_guard))
         .layer(TraceLayer::new_for_http())
         .with_state(app.clone());
     let l = TcpListener::bind(&args.listen).await?;
@@ -5960,6 +5962,125 @@ pub async fn run_with_station(station: Option<StationSpec>) -> Result<()> {
         })
         .await?;
     Ok(())
+}
+
+/// Browser-origin guard. The LAN is trusted, so there is no authentication;
+/// this only stops a foreign web page, opened on a LAN machine, from driving
+/// the API through the visitor's browser. Clients that send no `Origin`
+/// (curl, scripts, binary packages) and the built-in UI are unaffected.
+async fn browser_guard(request: Request<Body>, next: Next) -> Response {
+    let headers = request.headers();
+    // DNS rebinding: the page's origin is an attacker domain that now resolves
+    // to the station, so the browser sends that domain as Host.
+    let host = headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .or_else(|| request.uri().authority().map(|authority| authority.as_str()));
+    if host.is_some_and(|host| !host_header_allowed(host)) {
+        return (StatusCode::FORBIDDEN, "Host is not a local address").into_response();
+    }
+    // CSRF / cross-origin fetch: browsers attach Origin to every cross-origin
+    // request and to every non-GET request; "null" (sandboxed frames,
+    // file://, some redirects) is rejected.
+    if let Some(origin) = headers.get(header::ORIGIN) {
+        if !origin.to_str().is_ok_and(origin_allowed) {
+            return (StatusCode::FORBIDDEN, "cross-origin request rejected").into_response();
+        }
+    }
+    // A form submission needs no CORS preflight and older browsers may omit
+    // Origin. Such requests always carry a CORS-safelisted content type, so a
+    // mutating request with one must also carry a custom header, which no page
+    // can add cross-origin without a preflight that Luna never approves.
+    let mutating = matches!(
+        *request.method(),
+        Method::POST | Method::PUT | Method::DELETE | Method::PATCH
+    );
+    if mutating
+        && headers
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(form_content_type)
+        && headers.get("x-luna-local").map(|value| value.as_bytes()) != Some(b"1")
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            "form-encoded requests require the X-Luna-Local: 1 header",
+        )
+            .into_response();
+    }
+    next.run(request).await
+}
+
+/// `Host` must be an IP literal (any address: a rebinding page cannot make the
+/// browser send one) or a name that only resolves inside the LAN.
+fn host_header_allowed(value: &str) -> bool {
+    let value = value.trim();
+    let host = if let Some(rest) = value.strip_prefix('[') {
+        // "[v6]" or "[v6]:port"; the inner value must be an IPv6 address.
+        let Some((inner, tail)) = rest.split_once(']') else {
+            return false;
+        };
+        if !(tail.is_empty() || tail.strip_prefix(':').is_some_and(port_valid)) {
+            return false;
+        }
+        return inner.parse::<std::net::Ipv6Addr>().is_ok();
+    } else if value.parse::<std::net::IpAddr>().is_ok() {
+        // Bare IPv6 without brackets (not RFC-valid, but unambiguous).
+        return true;
+    } else {
+        match value.rsplit_once(':') {
+            Some((host, port)) if port_valid(port) => host,
+            Some(_) => return false,
+            None => value,
+        }
+    };
+    host.parse::<std::net::Ipv4Addr>().is_ok() || local_name(host)
+}
+
+fn port_valid(port: &str) -> bool {
+    !port.is_empty() && port.parse::<u16>().is_ok()
+}
+
+fn local_name(host: &str) -> bool {
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    !host.is_empty()
+        && (host == "localhost"
+            || host.ends_with(".localhost")
+            || host.strip_suffix(".local").is_some_and(|name| !name.is_empty()))
+}
+
+/// `Origin` must name a loopback/private address or a LAN-only name. `.local`
+/// is accepted so the UI keeps working when opened via mDNS;
+fn origin_allowed(value: &str) -> bool {
+    let Ok(url) = Url::parse(value) else {
+        return false; // includes the opaque origin "null"
+    };
+    if !matches!(url.scheme(), "http" | "https") {
+        return false;
+    }
+    match url.host() {
+        Some(url::Host::Ipv4(ip)) => private_ipv4(ip),
+        Some(url::Host::Ipv6(ip)) => match ip.to_ipv4_mapped() {
+            Some(v4) => private_ipv4(v4),
+            None => ip.is_loopback() || (ip.segments()[0] & 0xfe00) == 0xfc00,
+        },
+        Some(url::Host::Domain(name)) => local_name(name),
+        None => false,
+    }
+}
+
+fn private_ipv4(ip: std::net::Ipv4Addr) -> bool {
+    // 127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
+    ip.is_loopback() || ip.is_private()
+}
+
+/// Content types a browser may send cross-origin without a preflight.
+fn form_content_type(value: &str) -> bool {
+    let essence = value.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
+    matches!(
+        essence.as_str(),
+        "application/x-www-form-urlencoded" | "multipart/form-data" | "text/plain"
+    )
 }
 
 async fn shutdown_signal() {
@@ -6002,6 +6123,92 @@ const UI: &str = include_str!("../web/index.html");
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn host_header_accepts_only_ip_literals_and_local_names() {
+        for host in [
+            "192.168.1.5", "192.168.1.5:8099", "8.8.8.8:80", "[::1]", "[::1]:8099",
+            "[fe80::1]:8099", "::1", "localhost", "localhost:8099", "LOCALHOST.",
+            "station.local", "yandex-mini.local:8099",
+        ] {
+            assert!(host_header_allowed(host), "{host} should be allowed");
+        }
+        for host in [
+            "evil.com", "evil.com:8099", "192.168.1.5.nip.io", "local", ".local",
+            "[::1", "[::1]x", "[evil.com]:80", "192.168.1.5:abc", "localhost.evil.com", "",
+        ] {
+            assert!(!host_header_allowed(host), "{host} should be rejected");
+        }
+    }
+
+    #[test]
+    fn origin_accepts_only_loopback_private_and_local_names() {
+        for origin in [
+            "http://127.0.0.1:8099", "http://localhost:8099", "http://10.1.2.3",
+            "http://172.16.0.1", "http://172.31.255.255", "http://192.168.1.10:8099",
+            "http://[::1]:8099", "http://[fd12::1]", "http://[::ffff:192.168.1.2]",
+            "https://station.local",
+        ] {
+            assert!(origin_allowed(origin), "{origin} should be allowed");
+        }
+        for origin in [
+            "null", "https://evil.com", "http://8.8.8.8", "http://172.32.0.1",
+            "http://[2001:db8::1]", "http://[::ffff:8.8.8.8]", "file:///tmp/x.html",
+            "http://localhost.evil.com", "garbage",
+        ] {
+            assert!(!origin_allowed(origin), "{origin} should be rejected");
+        }
+    }
+
+    #[tokio::test]
+    async fn browser_guard_blocks_cross_site_requests_only() {
+        use tower::ServiceExt;
+        let app = || {
+            Router::new()
+                .route("/api/x", get(|| async { "ok" }).post(|| async { "ok" }))
+                .layer(middleware::from_fn(browser_guard))
+        };
+        let status = |request: Request<Body>| async move {
+            app().oneshot(request).await.unwrap().status()
+        };
+        let base = || Request::builder().uri("/api/x").header("host", "192.168.1.5:8099");
+        // CLI: no Origin, JSON or empty body.
+        assert_eq!(status(base().method("POST").body(Body::empty()).unwrap()).await, StatusCode::OK);
+        assert_eq!(
+            status(base().method("POST").header("content-type", "application/json").body(Body::empty()).unwrap()).await,
+            StatusCode::OK
+        );
+        // DNS rebinding.
+        assert_eq!(
+            status(Request::builder().uri("/api/x").header("host", "rebind.evil.com:8099").body(Body::empty()).unwrap()).await,
+            StatusCode::FORBIDDEN
+        );
+        // Cross-site fetch / form.
+        assert_eq!(
+            status(base().method("POST").header("origin", "https://evil.com").body(Body::empty()).unwrap()).await,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            status(base().method("POST").header("origin", "null").body(Body::empty()).unwrap()).await,
+            StatusCode::FORBIDDEN
+        );
+        // Form-encoded mutation without the custom header (Origin omitted).
+        assert_eq!(
+            status(base().method("POST").header("content-type", "multipart/form-data; boundary=x").body(Body::empty()).unwrap()).await,
+            StatusCode::FORBIDDEN
+        );
+        // Built-in UI: same-origin, with the custom header.
+        assert_eq!(
+            status(
+                base().method("POST")
+                    .header("origin", "http://192.168.1.5:8099")
+                    .header("content-type", "multipart/form-data; boundary=x")
+                    .header("x-luna-local", "1")
+                    .body(Body::empty()).unwrap()
+            ).await,
+            StatusCode::OK
+        );
+    }
 
     #[test]
     fn invalid_clock_request_does_not_cancel_overlay() {

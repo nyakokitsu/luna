@@ -647,7 +647,10 @@ function show(element, status, text) {
   element.textContent = status + ' ' + (text ? pretty(text) : 'OK');
 }
 async function fetchApi(path, options) {
-  const response = await fetch(api + path, options || {});
+  options = options || {};
+  // Required by the server for form-encoded mutations (e.g. .yap upload).
+  options.headers = Object.assign({ 'X-Luna-Local': '1' }, options.headers);
+  const response = await fetch(api + path, options);
   const text = await response.text();
   return { response: response, text: text };
 }
