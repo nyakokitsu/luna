@@ -5778,7 +5778,10 @@ pub async fn run_with_station(station: Option<StationSpec>) -> Result<()> {
     if crate::audio::playback_pcm().is_some() && crate::audio::available() {
         device.features.push("audio.jobs.v1".into());
     }
-    if crate::owner::enabled() { device.features.push("owner.tools.v1".into()); }
+    if crate::owner::enabled() {
+        device.features.push("owner.tools.v1".into());
+        if ipc_endpoint("aliced").is_ok() {device.features.push("owner.speech.phase.v1".into());}
+    }
     tracing::info!(model=%device.model,features=?device.features,"detected device");
     let app = App {
         root: args.data_dir.clone(),
@@ -5969,7 +5972,9 @@ pub async fn run_with_station(station: Option<StationSpec>) -> Result<()> {
         let (audio_router,shutdown)=crate::audio_jobs::router(app.root.clone())?;
         router = router.merge(audio_router);
         audio_shutdown=Some(shutdown);
-        if crate::owner::enabled() {router=router.merge(crate::owner::router(app.root.clone()));}
+        if crate::owner::enabled() {
+            router=router.merge(crate::owner::router(app.root.clone())).merge(owner_phase_router());
+        }
     }
     let router = router
         .layer(DefaultBodyLimit::max(67 * 1024 * 1024))
@@ -6106,6 +6111,23 @@ fn form_content_type(value: &str) -> bool {
     )
 }
 
+fn phase_metadata(event: serde_json::Value) -> serde_json::Value {
+    let phase=event.get("phase").and_then(|s|s.as_str()).unwrap_or("unknown");
+    serde_json::json!({"phase":phase,"initial_snapshot":event.get("initial_snapshot").and_then(|v|v.as_bool()).unwrap_or(true)})
+}
+
+fn owner_phase_router() -> Router {
+    async fn phase(State(reader):State<Arc<std::sync::Mutex<media::SpeechReader>>>) -> Result<Json<serde_json::Value>,ApiError> {
+        let value=task::spawn_blocking(move || -> Result<serde_json::Value> {
+            let mut reader=reader.lock().map_err(|_|anyhow!("speech reader unavailable"))?;
+            Ok(reader.next()?.map(phase_metadata).unwrap_or_else(||serde_json::json!({"phase":"unknown","initial_snapshot":true})))
+        }).await.context("phase reader task failed")??;
+        Ok(Json(value))
+    }
+    Router::new().route("/api/owner/phase",get(phase))
+        .with_state(Arc::new(std::sync::Mutex::new(media::SpeechReader::default())))
+}
+
 async fn shutdown_signal() {
     #[cfg(unix)]
     {
@@ -6145,6 +6167,11 @@ const UI: &str = include_str!("../web/index.html");
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn owner_phase_does_not_expose_speech_or_request_identity() {
+        let value=super::phase_metadata(serde_json::json!({"phase":"speaking","initial_snapshot":false,"transcript":"private words","request_id":"private identity","account":"private"}));
+        assert_eq!(value,serde_json::json!({"phase":"speaking","initial_snapshot":false}));
+    }
     use super::*;
 
     #[test]
