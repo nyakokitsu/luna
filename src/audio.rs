@@ -21,14 +21,25 @@ pub(crate) fn playback_pcm() -> Option<String> {
 }
 
 pub(crate) fn play_alsa(path: &Path, pcm: &str) -> Result<()> {
+    play_alsa_cancel(path, pcm, &std::sync::atomic::AtomicBool::new(false))
+}
+
+pub(crate) fn play_alsa_cancel(path: &Path, pcm: &str, cancelled: &std::sync::atomic::AtomicBool) -> Result<()> {
+    use std::sync::atomic::Ordering;
+    if cancelled.load(Ordering::Relaxed) { bail!("playback cancelled") }
     let mut child = std::process::Command::new("aplay")
         .args(["-q", "-D", pcm])
         .arg(path)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .spawn()
         .context("start ALSA playback")?;
     let deadline =
         std::time::Instant::now() + std::time::Duration::from_secs(MAX_PLAYBACK_SECONDS + 10);
     loop {
+        if cancelled.load(Ordering::Relaxed) {
+            let _ = child.kill(); let _ = child.wait(); bail!("playback cancelled")
+        }
         if let Some(status) = child.try_wait().context("wait for ALSA playback")? {
             if !status.success() {
                 bail!("ALSA playback failed: {status}")
@@ -44,7 +55,7 @@ pub(crate) fn play_alsa(path: &Path, pcm: &str) -> Result<()> {
     }
 }
 
-fn validate_wav(bytes: &[u8]) -> Result<()> {
+pub(crate) fn validate_wav(bytes: &[u8]) -> Result<()> {
     if bytes.len() > MAX_AUDIO_BYTES {
         bail!("audio file exceeds 64 MiB")
     }

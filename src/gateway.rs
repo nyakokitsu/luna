@@ -5775,6 +5775,10 @@ pub async fn run_with_station(station: Option<StationSpec>) -> Result<()> {
             device.features.push(feature);
         }
     }
+    if crate::audio::playback_pcm().is_some() && crate::audio::available() {
+        device.features.push("audio.jobs.v1".into());
+    }
+    if crate::owner::enabled() { device.features.push("owner.tools.v1".into()); }
     tracing::info!(model=%device.model,features=?device.features,"detected device");
     let app = App {
         root: args.data_dir.clone(),
@@ -5959,16 +5963,24 @@ pub async fn run_with_station(station: Option<StationSpec>) -> Result<()> {
             .route("/api/led/off/ring", post(led_ring_off))
             .route("/api/led/off/logo", post(led_logo_off));
     }
+    let mut router = router.with_state(app.clone());
+    let mut audio_shutdown = None;
+    if web.api {
+        let (audio_router,shutdown)=crate::audio_jobs::router(app.root.clone())?;
+        router = router.merge(audio_router);
+        audio_shutdown=Some(shutdown);
+        if crate::owner::enabled() {router=router.merge(crate::owner::router(app.root.clone()));}
+    }
     let router = router
         .layer(DefaultBodyLimit::max(67 * 1024 * 1024))
         .layer(middleware::from_fn(browser_guard))
-        .layer(TraceLayer::new_for_http())
-        .with_state(app.clone());
+        .layer(TraceLayer::new_for_http());
     let l = TcpListener::bind(&args.listen).await?;
     tracing::info!("web UI: http://{}", args.listen);
     axum::serve(l, router)
         .with_graceful_shutdown(async move {
             shutdown_signal().await;
+            if let Some(shutdown)=audio_shutdown {shutdown.stop().await;}
             stop_all_packages(&app).await;
         })
         .await?;
