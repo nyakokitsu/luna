@@ -12,6 +12,7 @@ binary="$YAM_PKG/bin/luna"
 stable_binary="$YAM_ROOT/bin/luna"
 init="/etc/init.d/S99luna"
 listen="${LUNA_LISTEN:-0.0.0.0:8099}"
+yam_run="${YAM_RUN:-/tmp/yam}"
 
 [ -x "$binary" ] || { echo "Luna binary is missing: $binary" >&2; exit 1; }
 mkdir -p "$data"
@@ -53,18 +54,23 @@ listen='$listen'
 case "\${1:-start}" in
 start)
   [ -x "\$binary" ] || exit 0
-  mkdir -p "\$data"
+  mkdir -p "\$data" '$yam_run'
+  touch '$yam_run/yam.lock'
   if [ -f "\$pidfile" ]; then
     pid=\$(cat "\$pidfile" 2>/dev/null || true)
     case "\$pid" in
       ''|*[!0-9]*) rm -f "\$pidfile" ;;
       *)
-        if kill -0 "\$pid" 2>/dev/null; then exit 0; fi
+        if kill -0 "\$pid" 2>/dev/null &&
+           tr '\0' ' ' <"/proc/\$pid/cmdline" 2>/dev/null | grep -q 'luna'; then
+          exit 0
+        fi
         rm -f "\$pidfile"
         ;;
     esac
   fi
   nohup "\$binary" --listen "\$listen" --data-dir "\$data" \
+    --yam-root "\$root" --yam-run '$yam_run' \
     >"\$logfile" 2>&1 </dev/null &
   echo \$! >"\$pidfile"
   ;;
