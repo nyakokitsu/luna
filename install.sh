@@ -171,7 +171,7 @@ verify "$TMP/$ASSET"
 REMOTE="$TMP/remote.sh"
 cat >"$REMOTE" <<'REMOTE'
 set -eu
-root="$LUNA_ROOT"; binary="$root/bin/luna"; staged="$root/bin/luna.new"; pidfile="$root/luna.pid"; init=/etc/init.d/S99luna
+root="$LUNA_ROOT"; binary="$root/bin/luna"; staged="$root/bin/luna.new"; pidfile="$root/luna.pid"; logfile="$root/luna.log"; init=/etc/init.d/S99luna
 mount -o remount,rw / 2>/dev/null || true
 mount | grep ' on / ' | grep -q '(rw' || { echo "root filesystem is not writable" >&2; exit 1; }
 mkdir -p "$root/bin" "$root/data"; chmod 0755 "$staged"
