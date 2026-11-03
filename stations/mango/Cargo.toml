@@ -1,0 +1,12 @@
+[package]
+name = "luna-mango"
+version = "0.2.7"
+edition = "2021"
+
+[[bin]]
+name = "luna-mango"
+path = "station_main.rs"
+
+[dependencies]
+anyhow = "1"
+luna = { path = "../.." }

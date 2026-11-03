@@ -44,6 +44,7 @@ members = [
     "stations/yandexstation_2",
     "stations/pickle",
     "stations/yandexstation_3",
+    "stations/mango",
 ]
 
 [profile.release]
