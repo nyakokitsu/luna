@@ -94,15 +94,15 @@ def compact(x):
     if not x: return ""
     x = re.sub(r"[A-Z]{4}$", "", str(x).strip())
     # Отбрасываем серийный суффикс вроде "_F6D0" или "-16AK", только если
-    # в нём есть цифра. "-mini", "-lite" и "-midi" — части имени модели.
-    x = re.sub(r"[-_](?=[a-z]*[0-9])[a-z0-9]{4}$", "", x.lower())
+    # в нём есть цифра. "-mini", "-lite", "-midi" и "-gen2" — части имени модели.
+    x = re.sub(r"[-_](?!gen[0-9]$)(?=[a-z]*[0-9])[a-z0-9]{4}$", "", x.lower())
     return re.sub(r"[^a-z0-9]", "", x)
 
 t_norm = compact(target)
 devices = data.get("devices", [])
 def aliases(entry):
-    names = entry.get("models", []) + [entry.get("device", ""), entry.get("codename", "")]
-    return [compact(x) for x in names if x]
+    names = entry.get("models", []) + [entry.get("device", ""), entry.get("codename", ""), entry.get("yam_target", "")]
+    return [re.sub(r"[^a-z0-9]", "", str(x).strip().lower()) for x in names if x]
 
 # Точное совпадение имеет приоритет; подстрока — только запасной вариант
 # автоматического определения.

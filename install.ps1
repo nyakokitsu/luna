@@ -26,13 +26,13 @@ function Compact([string]$Value) {
     if ([string]::IsNullOrWhiteSpace($Value)) { return "" }
     $value = $Value.Trim() -creplace '[A-Z]{4}$', ''
     # Отбрасываем серийный суффикс вроде "_F6D0" или "-16AK", только если
-    # в нём есть цифра. "-mini", "-lite" и "-midi" — части имени модели.
-    $value = $value.ToLowerInvariant() -creplace '[-_](?=[a-z]*[0-9])[a-z0-9]{4}$', ''
+    # в нём есть цифра. "-mini", "-lite", "-midi" и "-gen2" — части имени модели.
+    $value = $value.ToLowerInvariant() -creplace '[-_](?!gen[0-9]$)(?=[a-z]*[0-9])[a-z0-9]{4}$', ''
     return ($value -creplace '[^a-z0-9]', '')
 }
 function Get-Aliases($Entry) {
-    return @(@($Entry.models) + @($Entry.device, $Entry.codename) |
-        Where-Object { $_ } | ForEach-Object { Compact ([string]$_) })
+    return @(@($Entry.models) + @($Entry.device, $Entry.codename, $Entry.yam_target) |
+        Where-Object { $_ } | ForEach-Object { ([string]$_).Trim().ToLowerInvariant() -creplace '[^a-z0-9]', '' })
 }
 Require-Command "adb"
 if ($RemoteRoot -notmatch '^[A-Za-z0-9_./-]+$') { throw "Invalid remote root" }
