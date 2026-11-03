@@ -64,7 +64,8 @@ root="$LUNA_ROOT"; init=/etc/init.d/S99luna
 rm -f "$init" "$root/bin/luna" "$root/bin/luna.previous" "$root/luna.pid"
 echo "Luna removed"
 '@
-        Set-Content -Path "$temp/remote.sh" -Value $remoteText -Encoding ascii
+        $remoteText = ($remoteText -replace "`r`n", "`n") + "`n"
+        [IO.File]::WriteAllText("$temp/remote.sh", $remoteText, [Text.Encoding]::ASCII)
         Get-Content "$temp/remote.sh" -Raw | & adb -s $Serial shell "LUNA_ROOT='$RemoteRoot' sh -s"
         if ($LASTEXITCODE -ne 0) { throw "Remote uninstall failed" }
         Write-Host "Luna removed from $Serial"
@@ -111,7 +112,7 @@ echo "Luna removed"
 # Managed by Luna
 set -eu
 root=/data/quazar/luna; binary=$root/bin/luna; pidfile=$root/luna.pid; logfile=$root/luna.log
-case "$1" in
+case "${1:-start}" in
 start)
   [ -x "$binary" ] || exit 0; mkdir -p "$root/data"
   if [ -f "$pidfile" ] && kill -0 "$(cat "$pidfile")" 2>/dev/null; then exit 0; fi
@@ -142,9 +143,9 @@ INIT
 chmod 0755 "$init"; "$init" start
 echo "Luna installed"
 '@
-    $remoteText = $remoteText.Replace("__INIT__", $init)
+    $remoteText = ($remoteText.Replace("__INIT__", $init) -replace "`r`n", "`n") + "`n"
     Log "Uploading $asset to $RemoteRoot"
-    Set-Content -Path "$temp/remote.sh" -Value $remoteText -Encoding ascii
+    [IO.File]::WriteAllText("$temp/remote.sh", $remoteText, [Text.Encoding]::ASCII)
     & adb -s $Serial push "$temp/$asset" "$RemoteRoot/bin/luna.new" | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "adb push failed" }
     Log "Starting Luna on the station"
