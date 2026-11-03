@@ -36,22 +36,33 @@ fn verified() -> bool {
         let build = fs::read_to_string(VERSION_PATH).unwrap_or_default();
         let build = build.trim();
         let compatible = fs::read(COMPATIBLE_PATH).unwrap_or_default();
-        let compatible = String::from_utf8_lossy(&compatible).replace('\0', " ");
-        let has = |token: &str| compatible.contains(token);
-        match build {
-            "0.369.1.50.4794649087.20261021.295" => has("yandex,station-midi"),
-            "0.369.1.50.4794659041.20261021.299" => has("yandex,station-mini2"),
-            "0.369.1.50.4795647582.20261021.133" => has("yandex,plum-evt2"),
-            "0.369.1.50.4794654278.20261021.133" => has("yandex,prune-evt2"),
-            "0.369.1.46.4778262955.20261013.160" => has("yandex,cucumber"),
-            "0.369.1.46.4778262442.20261013.297" => has("yandex,yandexmicro"),
-            "0.369.1.50.4794663100.20261021.160" => {
-                has("yandex,cucumber-dvt2") || has("yandex,cucumber")
-            }
-            "1.266.4.40.2633723173.20241021" => true,
-            _ => false,
-        }
+        verified_build(build, &compatible)
     })
+}
+
+// Keep firmware qualification independent of filesystem state so unqualified
+// builds and look-alike DT names can be rejected before opening IPC sockets.
+fn verified_build(build: &str, compatible: &[u8]) -> bool {
+    if build == "0.369.1.46.4793643989.20261020.299" {
+        return compatible
+            .split(|byte| *byte == 0)
+            .any(|entry| entry == b"yandex,station-mini2");
+    }
+    let compatible = String::from_utf8_lossy(compatible).replace('\0', " ");
+    let has = |token: &str| compatible.contains(token);
+    match build {
+        "0.369.1.50.4794649087.20261021.295" => has("yandex,station-midi"),
+        "0.369.1.50.4794659041.20261021.299" => has("yandex,station-mini2"),
+        "0.369.1.50.4795647582.20261021.133" => has("yandex,plum-evt2"),
+        "0.369.1.50.4794654278.20261021.133" => has("yandex,prune-evt2"),
+        "0.369.1.46.4778262955.20261013.160" => has("yandex,cucumber"),
+        "0.369.1.46.4778262442.20261013.297" => has("yandex,yandexmicro"),
+        "0.369.1.50.4794663100.20261021.160" => {
+            has("yandex,cucumber-dvt2") || has("yandex,cucumber")
+        }
+        "1.266.4.40.2633723173.20241021" => true,
+        _ => false,
+    }
 }
 
 fn read_ports() -> Result<(u16, u16)> {
@@ -325,6 +336,54 @@ pub fn set(percent: u8) -> Result<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mini2_046_requires_exact_firmware_and_dt_entry() {
+        let build = "0.369.1.46.4793643989.20261020.299";
+        assert!(verified_build(
+            build,
+            b"yandex,station-mini2\0amlogic,axg\0"
+        ));
+        assert!(verified_build(
+            build,
+            b"amlogic,axg\0yandex,station-mini2\0"
+        ));
+        for compatible in [
+            &b""[..],
+            &b"yandex,station-mini\0"[..],
+            &b"yandex,station-midi\0"[..],
+            &b"prefix-yandex,station-mini2\0"[..],
+            &b"yandex,station-mini2-suffix\0"[..],
+        ] {
+            assert!(!verified_build(build, compatible));
+        }
+        for unqualified in [
+            "0.369.1.46.4793643989.20261020.298",
+            "0.369.1.46.4793643989.20261020.299-extra",
+            "0.369.1.46",
+            "",
+        ] {
+            assert!(!verified_build(unqualified, b"yandex,station-mini2\0"));
+        }
+    }
+
+    #[test]
+    fn existing_native_firmware_qualification_is_preserved() {
+        for (build, board) in [
+            ("0.369.1.50.4794649087.20261021.295", "yandex,station-midi"),
+            ("0.369.1.50.4794659041.20261021.299", "yandex,station-mini2"),
+            ("0.369.1.50.4795647582.20261021.133", "yandex,plum-evt2"),
+            ("0.369.1.50.4794654278.20261021.133", "yandex,prune-evt2"),
+            ("0.369.1.46.4778262955.20261013.160", "yandex,cucumber"),
+            ("0.369.1.46.4778262442.20261013.297", "yandex,yandexmicro"),
+            ("0.369.1.50.4794663100.20261021.160", "yandex,cucumber-dvt2"),
+            ("0.369.1.50.4794663100.20261021.160", "yandex,cucumber"),
+        ] {
+            assert!(verified_build(build, board.as_bytes()));
+            assert!(!verified_build(build, b"unqualified-board\0"));
+        }
+        assert!(verified_build("1.266.4.40.2633723173.20241021", b""));
+    }
 
     /// Independently transcribed schema fixture from the reference helper:
     /// field252 IOControl88, VolumeSet254, PercentLevel 50.0f, Source=Button.
