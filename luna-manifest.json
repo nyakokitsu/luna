@@ -119,6 +119,21 @@
       "binary": "luna-pickle",
       "asset": "luna-pickle-aarch64-linux-musl",
       "target": "aarch64-unknown-linux-musl"
+    },
+    {
+      "device": "mango",
+      "codename": "mango",
+      "yam_target": "mango",
+      "manifest_path": "stations/mango/Cargo.toml",
+      "models": [
+        "mango",
+        "street",
+        "yandexstationstreet",
+        "yandex-station-street"
+      ],
+      "binary": "luna-mango",
+      "asset": "luna-mango-armv7-unknown-linux-musleabihf",
+      "target": "armv7-unknown-linux-musleabihf"
     }
   ]
 }
