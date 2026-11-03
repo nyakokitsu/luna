@@ -3,7 +3,7 @@ version: 0.2.20
 license: MIT
 description: Luna host runtime for Lua, Quasar and legacy plugins
 provides: [luna-yam-binary-host, luna-binary-dependencies-v1]
-targets: [yandexmini, yandexmicro, yandexmini_2, yandexmini3, yandexmidi, yandexplum, yandexstation_2, pickle, mango]
+targets: [yandexmini, yandexmicro, yandexmini_2, yandexmini3, yandexmidi, yandexplum, yandexstation_2, pickle, mango, orion]
 files:
   bin/luna: target/$YAM_TRIPLE/release/luna
   bin/luna-postinstall: tools/luna-postinstall.sh
@@ -16,6 +16,7 @@ files:
   bin/luna-yandexplum: target/$YAM_TRIPLE/release/luna-yandexplum
   bin/luna-yandexstation_2: target/$YAM_TRIPLE/release/luna-yandexstation_2
   bin/luna-mango: target/$YAM_TRIPLE/release/luna-mango
+  bin/luna-yandexstation_3: target/$YAM_TRIPLE/release/luna-yandexstation_3
   bin/luna-pickle: target/$YAM_TRIPLE/release/luna-pickle
   share/luna/web/: web/
 postinstall: [bin/luna-postinstall]

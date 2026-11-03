@@ -134,6 +134,20 @@
       "binary": "luna-mango",
       "asset": "luna-mango-armv7-unknown-linux-musleabihf",
       "target": "armv7-unknown-linux-musleabihf"
+    },
+    {
+      "device": "yandexstation_3",
+      "codename": "orion",
+      "yam_target": "orion",
+      "manifest_path": "stations/yandexstation_3/Cargo.toml",
+      "models": [
+        "yandexstation_3",
+        "station3",
+        "orion"
+      ],
+      "binary": "luna-yandexstation_3",
+      "asset": "luna-yandexstation_3-aarch64-linux-musl",
+      "target": "aarch64-unknown-linux-musl"
     }
   ]
 }
