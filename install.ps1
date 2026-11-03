@@ -30,6 +30,22 @@ function Compact([string]$Value) {
     $value = $value.ToLowerInvariant() -creplace '[-_](?!gen[0-9]$)(?=[a-z]*[0-9])[a-z0-9]{4}$', ''
     return ($value -creplace '[^a-z0-9]', '')
 }
+function Get-DetectedDtPlatform {
+    $dtRaw = Invoke-AdbOptional 'cat /proc/device-tree/compatible /proc/device-tree/amlogic-dt-id 2>/dev/null | tr "\000" "\n"'
+    $compact = ("$dtRaw".ToLowerInvariant() -replace '[\r\n \t]+', '')
+    if ($compact -match 'yandex,station-mini2|station-mini2|axg_mini2') { return "yandexmini_2" }
+    elseif ($compact -match 'yandex,cucumber|a5_cucumber|cucumber') { return "cucumber" }
+    elseif ($compact -match 'yandex,station-midi') { return "yandexstation_2" }
+    elseif ($compact -match 'yandex,orion|a5_orion|orion') { return "orion" }
+    elseif ($compact -match 'yandex,pickle|pickle|amlogic,a4') { return "pickle" }
+    elseif ($compact -match 'yandex,bergamot|yandex,station-mini3|bergamot') { return "bergamot" }
+    elseif ($compact -match 'yandex,saturn|saturn') { return "saturn" }
+    elseif ($compact -match 'yandex,mango|mango|amlogic,a1') { return "mango" }
+    elseif ($compact -match 'yandex,plum|yandex,prune|plum|prune|station-lite2') { return "plum" }
+    elseif ($compact -match 'yandex,yandexmicro|yandex.*station.*micro|yandexmicro|blackthorn') { return "yandexmicro" }
+    elseif ($compact -match 'axg_s420|amlogic,axg') { return "yandexmini" }
+    return ""
+}
 function Get-Aliases($Entry) {
     return @(@($Entry.models) + @($Entry.device, $Entry.codename, $Entry.yam_target) |
         Where-Object { $_ } | ForEach-Object { ([string]$_).Trim().ToLowerInvariant() -creplace '[^a-z0-9]', '' })
@@ -81,8 +97,13 @@ echo "Luna removed"
         Log "Using explicitly provided platform: $targetPlatform"
     } else {
         Log "Detecting station"
-        $targetPlatform = (Invoke-AdbShell 'uname -n').Trim()
-        Log "Auto-detected hostname: $targetPlatform"
+        $targetPlatform = Get-DetectedDtPlatform
+        if ($targetPlatform) {
+            Log "Auto-detected platform from device-tree: $targetPlatform"
+        } else {
+            $targetPlatform = (Invoke-AdbShell 'uname -n').Trim()
+            Log "Auto-detected hostname: $targetPlatform"
+        }
     }
 
     # Те же правила, что и в install.sh: точный alias имеет приоритет,

@@ -71,14 +71,37 @@ download "$URL/SHA256SUMS" "$TMP/SHA256SUMS"
 download "$URL/manifest.json" "$TMP/manifest.json"
 adb_optional() { adb -s "$SERIAL" shell "$1" 2>/dev/null || true; }
 
+detect_dt_platform() {
+  dt_id=$(adb_optional 'cat /proc/device-tree/compatible /proc/device-tree/amlogic-dt-id 2>/dev/null | tr "\000" "\n"' | tr -d '\r \t' | tr '[:upper:]' '[:lower:]')
+  case "$dt_id" in
+    *yandex,station-mini2*|*station-mini2*|*axg_mini2*) printf '%s\n' yandexmini_2 ;;
+    *yandex,cucumber*|*a5_cucumber*|*cucumber*) printf '%s\n' cucumber ;;
+    *yandex,station-midi*) printf '%s\n' yandexstation_2 ;;
+    *yandex,orion*|*a5_orion*|*orion*) printf '%s\n' orion ;;
+    *yandex,pickle*|*pickle*|*amlogic,a4*) printf '%s\n' pickle ;;
+    *yandex,bergamot*|*yandex,station-mini3*|*bergamot*) printf '%s\n' bergamot ;;
+    *yandex,saturn*|*saturn*) printf '%s\n' saturn ;;
+    *yandex,mango*|*mango*|*amlogic,a1*) printf '%s\n' mango ;;
+    *yandex,plum*|*yandex,prune*|*plum*|*prune*|*station-lite2*) printf '%s\n' plum ;;
+    *yandex,yandexmicro*|*yandex*station*micro*|*yandexmicro*|*blackthorn*) printf '%s\n' yandexmicro ;;
+    *axg_s420*|*amlogic,axg*) printf '%s\n' yandexmini ;;
+    *) return 1 ;;
+  esac
+}
+
 if [ -n "$PLATFORM" ]; then
   log "Using explicitly provided platform: $PLATFORM"
   TARGET="$PLATFORM"
   EXPLICIT=1
 else
   log "Detecting station"
-  TARGET=$(adb_optional 'uname -n' | tr -d '\r')
-  log "Auto-detected hostname: $TARGET"
+  TARGET=$(detect_dt_platform || true)
+  if [ -n "$TARGET" ]; then
+    log "Auto-detected platform from device-tree: $TARGET"
+  else
+    TARGET=$(adb_optional 'uname -n' | tr -d '\r')
+    log "Auto-detected hostname: $TARGET"
+  fi
   EXPLICIT=0
 fi
 
