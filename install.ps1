@@ -28,13 +28,29 @@ function Compact([string]$Value) {
     if ([string]::IsNullOrWhiteSpace($Value)) { return "" }
     $value = $Value.Trim() -creplace '[A-Z]{4}$', ''
     # Отбрасываем серийный суффикс вроде "_F6D0" или "-16AK", только если
-    # в нём есть цифра. "-mini", "-lite" и "-midi" — части имени модели.
-    $value = $value.ToLowerInvariant() -creplace '[-_](?=[a-z]*[0-9])[a-z0-9]{4}$', ''
+    # в нём есть цифра. "-mini", "-lite", "-midi" и "-gen2" — части имени модели.
+    $value = $value.ToLowerInvariant() -creplace '[-_](?!gen[0-9]$|[0-9]{4}$)(?=[a-z]*[0-9])[a-z0-9]{4}$', ''
     return ($value -creplace '[^a-z0-9]', '')
 }
+function Get-DetectedDtPlatform {
+    $dtRaw = Invoke-AdbOptional 'cat /proc/device-tree/compatible /proc/device-tree/amlogic-dt-id 2>/dev/null | tr "\000" "\n"'
+    $compact = ("$dtRaw".ToLowerInvariant() -replace '[\r\n \t]+', '')
+    if ($compact -match 'yandex,station-mini2|station-mini2|axg_mini2') { return "yandexmini_2" }
+    elseif ($compact -match 'yandex,cucumber|a5_cucumber|cucumber') { return "cucumber" }
+    elseif ($compact -match 'yandex,station-midi') { return "yandexstation_2" }
+    elseif ($compact -match 'yandex,orion|a5_orion|orion') { return "orion" }
+    elseif ($compact -match 'yandex,pickle|pickle|amlogic,a4') { return "pickle" }
+    elseif ($compact -match 'yandex,bergamot|yandex,station-mini3|bergamot') { return "bergamot" }
+    elseif ($compact -match 'yandex,saturn|saturn') { return "saturn" }
+    elseif ($compact -match 'yandex,mango|mango|amlogic,a1') { return "mango" }
+    elseif ($compact -match 'yandex,plum|yandex,prune|plum|prune|station-lite2') { return "plum" }
+    elseif ($compact -match 'yandex,yandexmicro|yandex.*station.*micro|yandexmicro|blackthorn') { return "yandexmicro" }
+    elseif ($compact -match 'axg_s420|amlogic,axg') { return "yandexmini" }
+    return ""
+}
 function Get-Aliases($Entry) {
-    return @(@($Entry.models) + @($Entry.device, $Entry.codename) |
-        Where-Object { $_ } | ForEach-Object { Compact ([string]$_) })
+    return @(@($Entry.models) + @($Entry.device, $Entry.codename, $Entry.yam_target) |
+        Where-Object { $_ } | ForEach-Object { ([string]$_).Trim().ToLowerInvariant() -creplace '[^a-z0-9]', '' })
 }
 Require-Command "adb"
 if ($Listen -notmatch "^[A-Za-z0-9_.:-]+$") { throw "Invalid listen address" }
@@ -67,7 +83,8 @@ root="$LUNA_ROOT"; init=/etc/init.d/S99luna
 rm -f "$init" "$root/bin/luna" "$root/bin/luna.previous" "$root/luna.pid"
 echo "Luna removed"
 '@
-        Set-Content -Path "$temp/remote.sh" -Value $remoteText -Encoding ascii
+        $remoteText = ($remoteText -replace "`r`n", "`n") + "`n"
+        [IO.File]::WriteAllText("$temp/remote.sh", $remoteText, [Text.Encoding]::ASCII)
         Get-Content "$temp/remote.sh" -Raw | & adb -s $Serial shell "LUNA_ROOT='$RemoteRoot' sh -s"
         if ($LASTEXITCODE -ne 0) { throw "Remote uninstall failed" }
         Write-Host "Luna removed from $Serial"
@@ -83,8 +100,13 @@ echo "Luna removed"
         Log "Using explicitly provided platform: $targetPlatform"
     } else {
         Log "Detecting station"
-        $targetPlatform = (Invoke-AdbShell 'uname -n').Trim()
-        Log "Auto-detected hostname: $targetPlatform"
+        $targetPlatform = Get-DetectedDtPlatform
+        if ($targetPlatform) {
+            Log "Auto-detected platform from device-tree: $targetPlatform"
+        } else {
+            $targetPlatform = (Invoke-AdbShell 'uname -n').Trim()
+            Log "Auto-detected hostname: $targetPlatform"
+        }
     }
 
     # Те же правила, что и в install.sh: точный alias имеет приоритет,
@@ -114,7 +136,7 @@ echo "Luna removed"
 # Managed by Luna
 set -eu
 root=/data/quazar/luna; binary=$root/bin/luna; pidfile=$root/luna.pid; logfile=$root/luna.log
-case "$1" in
+case "${1:-start}" in
 start)
   [ -x "$binary" ] || exit 0; mkdir -p "$root/data"
   if [ -f "$pidfile" ] && kill -0 "$(cat "$pidfile")" 2>/dev/null; then exit 0; fi
@@ -160,11 +182,11 @@ INIT
 chmod 0755 "$init"; "$init" start
 echo "Luna installed"
 '@
-    $remoteText = $remoteText.Replace("__INIT__", $init.Replace("/data/quazar/luna", $RemoteRoot)).Replace("__LUNA_LISTEN__", $Listen)
+    $remoteText = (($remoteText.Replace("__INIT__", $init.Replace("/data/quazar/luna", $RemoteRoot)).Replace("__LUNA_LISTEN__", $Listen)) -replace "`r`n", "`n") + "`n"
     $bootHook = if ($NoBootHook) { "0" } else { "1" }
     Invoke-AdbShell "mkdir -p '$RemoteRoot/bin'" | Out-Null
     Log "Uploading $asset to $RemoteRoot"
-    Set-Content -Path "$temp/remote.sh" -Value $remoteText -Encoding ascii
+    [IO.File]::WriteAllText("$temp/remote.sh", $remoteText, [Text.Encoding]::ASCII)
     & adb -s $Serial push "$temp/$asset" "$RemoteRoot/bin/luna.new" | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "adb push failed" }
     Log "Starting Luna on the station"

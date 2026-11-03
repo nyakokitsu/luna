@@ -81,7 +81,8 @@
       "models": [
         "yandexplum",
         "yandex-station-lite-2",
-        "yandex-station-lite2"
+        "yandex-station-lite2",
+        "yandex-lite-gen2"
       ],
       "binary": "luna-yandexplum",
       "asset": "luna-yandexplum-aarch64-linux-musl",

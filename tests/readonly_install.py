@@ -13,7 +13,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 def main():
     shell = (ROOT / "install.sh").read_text()
-    remote_sh = re.search(r"cat >\"\$REMOTE\" <<'REMOTE'\n(.*?)\nREMOTE", shell, re.S)[1]
+    remote_sh = re.findall(r"cat >\"\$REMOTE\" <<'REMOTE'\n(.*?)\nREMOTE", shell, re.S)[-1]
     powershell = (ROOT / "install.ps1").read_text()
     remote_ps = re.findall(r"\$remoteText = @'\n(.*?)\n'@", powershell, re.S)[-1]
     for label, script in [("sh", remote_sh), ("ps1", remote_ps)]:
