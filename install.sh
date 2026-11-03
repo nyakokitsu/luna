@@ -4,6 +4,7 @@ log() { printf '[%s] %s\n' "$(date '+%H:%M:%S')" "$*" >&2; }
 
 VERSION=${LUNA_VERSION:-latest}
 PLATFORM=${LUNA_PLATFORM:-}
+UNINSTALL=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --platform|-p)
@@ -12,8 +13,10 @@ while [ "$#" -gt 0 ]; do
     --version)
       [ "$#" -ge 2 ] || { echo "$1 requires a value" >&2; exit 2; }
       VERSION=$2; shift 2 ;;
+    --uninstall)
+      UNINSTALL=1; shift ;;
     --help|-h)
-      echo "Usage: $0 [VERSION] [--platform DEVICE]"; exit 0 ;;
+      echo "Usage: $0 [VERSION] [--platform DEVICE] [--uninstall]"; exit 0 ;;
     -*)
       echo "Unknown option: $1" >&2; exit 2 ;;
     *)
@@ -37,8 +40,11 @@ case "$VERSION" in
   v*) URL="$REPOSITORY/releases/download/$VERSION" ;;
   *) URL="$REPOSITORY/releases/download/v$VERSION" ;;
 esac
-for tool in adb python3; do command -v "$tool" >/dev/null || { echo "$tool is required" >&2; exit 4; }; done
-if command -v curl >/dev/null 2>&1; then DOWNLOAD=curl; elif command -v wget >/dev/null 2>&1; then DOWNLOAD=wget; else echo "curl or wget is required" >&2; exit 4; fi
+for tool in adb; do command -v "$tool" >/dev/null || { echo "$tool is required" >&2; exit 4; }; done
+if [ "$UNINSTALL" -eq 0 ]; then
+  command -v python3 >/dev/null || { echo "python3 is required" >&2; exit 4; }
+  if command -v curl >/dev/null 2>&1; then DOWNLOAD=curl; elif command -v wget >/dev/null 2>&1; then DOWNLOAD=wget; else echo "curl or wget is required" >&2; exit 4; fi
+fi
 
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/luna-install.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT HUP INT TERM
@@ -53,7 +59,7 @@ verify() {
   [ "$actual" = "$expected" ] || { echo "checksum mismatch: $1" >&2; exit 5; }
 }
 if [ -z "$SERIAL" ]; then
-  devices=$(adb devices | awk 'NR > 1 && $2 == "device" {print $1}')
+  devices=$(adb devices </dev/null | awk 'NR > 1 && $2 == "device" {print $1}')
   count=$(printf '%s\n' "$devices" | sed '/^\s*$/d' | wc -l | tr -d ' ')
   [ "$count" -gt 0 ] || { echo "No ADB station found." >&2; exit 6; }
   if [ "$count" -eq 1 ]; then SERIAL=$(printf '%s\n' "$devices" | head -n 1)
@@ -63,13 +69,27 @@ if [ -z "$SERIAL" ]; then
     SERIAL=$(printf '%s\n' "$devices" | sed -n "${n}p")
   fi
 fi
-adb -s "$SERIAL" get-state | grep -qx device || { echo "ADB station is offline" >&2; exit 6; }
+adb -s "$SERIAL" get-state </dev/null | grep -qx device || { echo "ADB station is offline" >&2; exit 6; }
 log "Connected to station $SERIAL"
+
+if [ "$UNINSTALL" -eq 1 ]; then
+  REMOTE="$TMP/remote.sh"
+  cat >"$REMOTE" <<'REMOTE'
+set -eu
+root="$LUNA_ROOT"; init=/etc/init.d/S99luna
+[ -x "$init" ] && "$init" stop || true
+rm -f "$init" "$root/bin/luna" "$root/bin/luna.previous" "$root/luna.pid"
+echo "Luna removed"
+REMOTE
+  adb -s "$SERIAL" shell "LUNA_ROOT='$ROOT' sh -s" <"$REMOTE"
+  log "Luna removed from $SERIAL"
+  exit 0
+fi
 
 log "Downloading release metadata"
 download "$URL/SHA256SUMS" "$TMP/SHA256SUMS"
 download "$URL/manifest.json" "$TMP/manifest.json"
-adb_optional() { adb -s "$SERIAL" shell "$1" 2>/dev/null || true; }
+adb_optional() { adb -s "$SERIAL" shell "$1" </dev/null 2>/dev/null || true; }
 
 detect_dt_platform() {
   dt_id=$(adb_optional 'cat /proc/device-tree/compatible /proc/device-tree/amlogic-dt-id 2>/dev/null | tr "\000" "\n"' | tr -d '\r \t' | tr '[:upper:]' '[:lower:]')
@@ -185,7 +205,7 @@ pid=$(cat "$pidfile" 2>/dev/null || true); case "$pid" in ''|*[!0-9]*) cat "$log
 kill -0 "$pid" 2>/dev/null || { cat "$logfile" 2>/dev/null || true; exit 1; }
 REMOTE
 log "Uploading $ASSET to $ROOT"
-adb -s "$SERIAL" push "$TMP/$ASSET" "$ROOT/bin/luna.new" >/dev/null
+adb -s "$SERIAL" push "$TMP/$ASSET" "$ROOT/bin/luna.new" </dev/null >/dev/null
 log "Starting Luna on the station"
 adb -s "$SERIAL" shell "LUNA_ROOT='$ROOT' sh -s" <"$REMOTE"
 log "Luna installed: $DEVICE ($CODENAME), API port 8099"
