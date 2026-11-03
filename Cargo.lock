@@ -1062,6 +1062,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "luna-pickle"
+version = "0.2.7"
+dependencies = [
+ "anyhow",
+ "luna",
+]
+
+[[package]]
 name = "luna-yandexmicro"
 version = "0.2.7"
 dependencies = [

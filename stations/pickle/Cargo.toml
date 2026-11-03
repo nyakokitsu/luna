@@ -1,0 +1,12 @@
+[package]
+name = "luna-pickle"
+version = "0.2.7"
+edition = "2021"
+
+[[bin]]
+name = "luna-pickle"
+path = "station_main.rs"
+
+[dependencies]
+anyhow = "1"
+luna = { path = "../.." }

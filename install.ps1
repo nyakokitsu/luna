@@ -5,6 +5,8 @@ param(
     [string]$Platform = $(if ($env:LUNA_PLATFORM) { $env:LUNA_PLATFORM } else { "" }),
     [string]$Repository = $(if ($env:LUNA_REPOSITORY) { $env:LUNA_REPOSITORY } else { "https://github.com/nyakokitsu/luna" }),
     [string]$RemoteRoot = $(if ($env:LUNA_REMOTE_ROOT) { $env:LUNA_REMOTE_ROOT } else { "/data/quazar/luna" }),
+    [string]$Listen = $(if ($env:LUNA_LISTEN) { $env:LUNA_LISTEN } else { "127.0.0.1:8100" }),
+    [switch]$NoBootHook,
     [switch]$Uninstall
 )
 $ErrorActionPreference = "Stop"
@@ -35,6 +37,7 @@ function Get-Aliases($Entry) {
         Where-Object { $_ } | ForEach-Object { Compact ([string]$_) })
 }
 Require-Command "adb"
+if ($Listen -notmatch "^[A-Za-z0-9_.:-]+$") { throw "Invalid listen address" }
 if ($RemoteRoot -notmatch '^[A-Za-z0-9_./-]+$') { throw "Invalid remote root" }
 $devices = @((& adb devices) | Where-Object { $_ -match '^([^\s]+)\s+device$' } | ForEach-Object { $Matches[1] })
 if (-not $Serial) {
@@ -117,9 +120,9 @@ start)
   if [ -f "$pidfile" ] && kill -0 "$(cat "$pidfile")" 2>/dev/null; then exit 0; fi
   rm -f "$pidfile"
   if command -v start-stop-daemon >/dev/null 2>&1; then
-    start-stop-daemon --start --background --make-pidfile --pidfile "$pidfile" --startas "$binary" -- --listen 0.0.0.0:8099 --data-dir "$root/data"
+    start-stop-daemon --start --background --make-pidfile --pidfile "$pidfile" --startas "$binary" -- --listen __LUNA_LISTEN__ --data-dir "$root/data"
   else
-    nohup "$binary" --listen 0.0.0.0:8099 --data-dir "$root/data" >"$logfile" 2>&1 </dev/null & echo $! >"$pidfile"
+    nohup "$binary" --listen __LUNA_LISTEN__ --data-dir "$root/data" >"$logfile" 2>&1 </dev/null & echo $! >"$pidfile"
   fi ;;
 stop) [ -f "$pidfile" ] && kill "$(cat "$pidfile")" 2>/dev/null || true; rm -f "$pidfile" ;;
 restart) "$0" stop; "$0" start ;;
@@ -128,7 +131,22 @@ esac
 '@
     $remoteText = @'
 set -eu
-root="$LUNA_ROOT"; binary="$root/bin/luna"; init=/etc/init.d/S99luna
+root="$LUNA_ROOT"; binary="$root/bin/luna"; staged="$root/bin/luna.new"; pidfile="$root/luna.pid"; init=/etc/init.d/S99luna
+
+# Explicit /data-only installation for read-only retail firmware. The owner
+# supplies persistence through an existing, trusted boot mechanism.
+if [ "${LUNA_BOOT_HOOK:-1}" = 0 ]; then
+  mkdir -p "$root/bin" "$root/data"
+  chmod 0755 "$staged"
+  [ ! -f "$binary" ] || cp "$binary" "$root/bin/luna.previous"
+  mv "$staged" "$binary"
+  nohup "$binary" --listen "$LUNA_LISTEN" --data-dir "$root/data" >"$root/luna.log" 2>&1 </dev/null &
+  echo $! >"$pidfile"
+  sleep 1
+  kill -0 "$(cat "$pidfile")"
+  echo "Luna started without a system boot hook; configure owner-managed persistence."
+  exit 0
+fi
 mount -o remount,rw / 2>/dev/null || true
 mount | grep ' on / ' | grep -q '(rw' || { echo "root filesystem is not writable" >&2; exit 1; }
 mkdir -p "$root/bin" "$root/data"; chmod 0755 "$root/bin/luna.new"
@@ -142,15 +160,17 @@ INIT
 chmod 0755 "$init"; "$init" start
 echo "Luna installed"
 '@
-    $remoteText = $remoteText.Replace("__INIT__", $init)
+    $remoteText = $remoteText.Replace("__INIT__", $init.Replace("/data/quazar/luna", $RemoteRoot)).Replace("__LUNA_LISTEN__", $Listen)
+    $bootHook = if ($NoBootHook) { "0" } else { "1" }
+    Invoke-AdbShell "mkdir -p '$RemoteRoot/bin'" | Out-Null
     Log "Uploading $asset to $RemoteRoot"
     Set-Content -Path "$temp/remote.sh" -Value $remoteText -Encoding ascii
     & adb -s $Serial push "$temp/$asset" "$RemoteRoot/bin/luna.new" | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "adb push failed" }
     Log "Starting Luna on the station"
-    Get-Content "$temp/remote.sh" -Raw | & adb -s $Serial shell "LUNA_ROOT='$RemoteRoot' sh -s"
+    Get-Content "$temp/remote.sh" -Raw | & adb -s $Serial shell "LUNA_ROOT='$RemoteRoot' LUNA_LISTEN='$Listen' LUNA_BOOT_HOOK='$bootHook' sh -s"
     if ($LASTEXITCODE -ne 0) { throw "Remote installation failed" }
-    Log "Luna installed on $Serial ($($entry.device)); API port 8099"
+    Log "Luna installed on $Serial ($($entry.device)); API $Listen"
 } finally {
     Remove-Item $temp -Recurse -Force -ErrorAction SilentlyContinue
 }

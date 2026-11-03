@@ -42,6 +42,7 @@ members = [
     "stations/yandexmidi",
     "stations/yandexplum",
     "stations/yandexstation_2",
+    "stations/pickle",
     "stations/yandexstation_3",
 ]
 

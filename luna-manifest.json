@@ -7,7 +7,10 @@
       "codename": "bergamot",
       "yam_target": "bergamot",
       "manifest_path": "stations/yandexmini3/Cargo.toml",
-      "models": ["yandexmini3", "yandex-mini3"],
+      "models": [
+        "yandexmini3",
+        "yandex-mini3"
+      ],
       "binary": "luna-yandexmini3",
       "asset": "luna-yandexmini3-aarch64-linux-musl",
       "target": "aarch64-unknown-linux-musl"
@@ -17,7 +20,12 @@
       "codename": "yandexmini",
       "yam_target": "yandexmini",
       "manifest_path": "stations/yandexmini/Cargo.toml",
-      "models": ["yandexmini", "yandexstationmini", "yandex-station-mini", "yndx-0004"],
+      "models": [
+        "yandexmini",
+        "yandexstationmini",
+        "yandex-station-mini",
+        "yndx-0004"
+      ],
       "binary": "luna-yandexmini",
       "asset": "luna-yandexmini-aarch64-linux-musl",
       "target": "aarch64-unknown-linux-musl"
@@ -27,7 +35,11 @@
       "codename": "yandexmicro",
       "yam_target": "yandexmicro",
       "manifest_path": "stations/yandexmicro/Cargo.toml",
-      "models": ["yandexmicro", "yandex-station-lite", "yandexstationmicro"],
+      "models": [
+        "yandexmicro",
+        "yandex-station-lite",
+        "yandexstationmicro"
+      ],
       "binary": "luna-yandexmicro",
       "asset": "luna-yandexmicro-aarch64-linux-musl",
       "target": "aarch64-unknown-linux-musl"
@@ -37,7 +49,12 @@
       "codename": "yandexmini_2",
       "yam_target": "yandexmini_2",
       "manifest_path": "stations/yandexmini_2/Cargo.toml",
-      "models": ["yandexmini_2", "yandexmini2", "yandexstationmini2", "yandex-station-mini2"],
+      "models": [
+        "yandexmini_2",
+        "yandexmini2",
+        "yandexstationmini2",
+        "yandex-station-mini2"
+      ],
       "binary": "luna-yandexmini_2",
       "asset": "luna-yandexmini_2-aarch64-linux-musl",
       "target": "aarch64-unknown-linux-musl"
@@ -47,7 +64,11 @@
       "codename": "cucumber",
       "yam_target": "cucumber",
       "manifest_path": "stations/yandexmidi/Cargo.toml",
-      "models": ["yandexmidi", "yandexcucumber", "yandex-station-midi"],
+      "models": [
+        "yandexmidi",
+        "yandexcucumber",
+        "yandex-station-midi"
+      ],
       "binary": "luna-yandexmidi",
       "asset": "luna-yandexmidi-aarch64-linux-musl",
       "target": "aarch64-unknown-linux-musl"
@@ -57,7 +78,11 @@
       "codename": "plum",
       "yam_target": "plum",
       "manifest_path": "stations/yandexplum/Cargo.toml",
-      "models": ["yandexplum", "yandex-station-lite-2", "yandex-station-lite2"],
+      "models": [
+        "yandexplum",
+        "yandex-station-lite-2",
+        "yandex-station-lite2"
+      ],
       "binary": "luna-yandexplum",
       "asset": "luna-yandexplum-aarch64-linux-musl",
       "target": "aarch64-unknown-linux-musl"
@@ -67,9 +92,31 @@
       "codename": "station2",
       "yam_target": "yandexstation_2",
       "manifest_path": "stations/yandexstation_2/Cargo.toml",
-      "models": ["yandexstation_2", "yandexstation2", "yandex-station-2"],
+      "models": [
+        "yandexstation_2",
+        "yandexstation2",
+        "yandex-station-2",
+        "yandex-station-gen2",
+        "yndx-00051"
+      ],
       "binary": "luna-yandexstation_2",
       "asset": "luna-yandexstation_2-aarch64-linux-musl",
+      "target": "aarch64-unknown-linux-musl"
+    },
+    {
+      "device": "pickle",
+      "codename": "pickle",
+      "yam_target": "pickle",
+      "manifest_path": "stations/pickle/Cargo.toml",
+      "models": [
+        "pickle",
+        "yandexmini_3_pro",
+        "yandex-mini-3-pro",
+        "yandex-mini-gen3-pro",
+        "yndx-00059"
+      ],
+      "binary": "luna-pickle",
+      "asset": "luna-pickle-aarch64-linux-musl",
       "target": "aarch64-unknown-linux-musl"
     }
   ]

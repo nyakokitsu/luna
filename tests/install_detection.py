@@ -23,6 +23,11 @@ CASES = [
     ("cucumber", True, "yandexmidi"),
     ("plum", True, "yandexplum"),
     ("yandexstation_2", True, "yandexstation_2"),
+    ("Yandex-Station-gen2", False, "yandexstation_2"),
+    ("Yandex-Mini-gen3-Pro-F6D0", False, "pickle"),
+    ("pickle", True, "pickle"),
+    ("yandexmini_3_pro", True, "pickle"),
+    ("YNDX-00059", True, "pickle"),
 ]
 
 
