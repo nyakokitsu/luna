@@ -1,6 +1,8 @@
 mod process;
 mod instance;
 mod audio;
+mod audio_jobs;
+mod owner;
 mod clock_text;
 mod gateway;
 mod quasar_microphone;
