@@ -47,6 +47,14 @@ mod yam_binary;
 mod dependencies;
 #[path = "quasar_volume.rs"]
 mod quasar_volume;
+#[path = "volume_io.rs"]
+mod volume_io;
+#[path = "native_player.rs"]
+mod native_player;
+#[path = "alice_input.rs"]
+mod alice_input;
+#[path = "manifest_cache.rs"]
+mod manifest_cache;
 
 #[derive(Parser)]
 struct Args {
@@ -754,6 +762,7 @@ struct App {
     speech_readers:
         Arc<Mutex<HashMap<String, (String, Arc<std::sync::Mutex<media::SpeechReader>>)>>>,
     speech_claims: Arc<Mutex<HashMap<String, (String, String, String, Instant, bool)>>>,
+    alice_readers: Arc<Mutex<HashMap<String, (String, Arc<std::sync::Mutex<alice_input::AliceReader>>)>>>,
     providers: Arc<Mutex<providers::Broker>>,
     custom_web: Arc<Mutex<HashMap<String, CustomWebPage>>>,
     runtime_api_url: String,
@@ -1098,6 +1107,7 @@ struct PluginManager {
     running: HashMap<String, Arc<RunningPackage>>,
     lifecycle: Arc<Mutex<()>>,
     shutting_down: bool,
+    manifest_cache: manifest_cache::ManifestCache,
 }
 fn yam_root_from_executable(executable: &Path) -> Option<PathBuf> {
     let bin = executable.parent()?;
@@ -1186,6 +1196,7 @@ impl PluginManager {
             running: HashMap::new(),
             lifecycle: Arc::new(Mutex::new(())),
             shutting_down: false,
+            manifest_cache: manifest_cache::ManifestCache::default(),
         })
     }
     fn save(&self) -> Result<()> {
@@ -1289,7 +1300,7 @@ impl PluginManager {
                     tracing::warn!(path=%p.display(), "ignoring plugin without plugin.toml");
                     continue;
                 };
-                let Ok(manifest) = toml::from_str::<Manifest>(&x) else {
+                let Ok(manifest) = self.manifest_cache.parse(&p, x) else {
                     tracing::warn!(path=%p.display(), "ignoring plugin with invalid plugin.toml");
                     continue;
                 };
@@ -1350,9 +1361,13 @@ impl PluginManager {
     }
     fn manifest(&self, id: &str) -> Result<Manifest> {
         let location = self.location(id)?;
-        Ok(toml::from_str(&fs::read_to_string(
-            location.root.join("plugin.toml"),
-        )?)?)
+        self.manifest_cache.read(&location.root.join("plugin.toml"))
+    }
+
+    fn permissions(&self, id: &str) -> Result<Vec<String>> {
+        let location = self.location(id)?;
+        self.manifest_cache
+            .permissions(&location.root.join("plugin.toml"))
     }
     fn location_and_manifest(&self, id: &str) -> Result<(PluginLocation, Manifest)> {
         let location = self.location(id)?;
@@ -3007,9 +3022,7 @@ fn amixer_output(args: &[String]) -> Result<String> {
         // amixer stop with "Invalid CTL default".
         command.env("LD_LIBRARY_PATH", library_path);
     }
-    let output = command
-        .args(args)
-        .output()
+    let output = volume_io::bounded_output(command.args(args), volume_io::AMIXER_TIMEOUT)
         .with_context(|| format!("run {}", path.display()))?;
     if !output.status.success() {
         bail!(
@@ -4146,6 +4159,7 @@ async fn run_binary(
     };
     if revoke {
         app.speech_readers.lock().await.remove(&id);
+        app.alice_readers.lock().await.remove(&id);
         app.speech_claims.lock().await.remove(&id);
     }
     result
@@ -4796,6 +4810,7 @@ async fn revoke_runtime(app: &App, id: &str, expected: &str) {
     };
     if revoke {
         app.speech_readers.lock().await.remove(id);
+        app.alice_readers.lock().await.remove(id);
         app.speech_claims.lock().await.remove(id);
     }
 }
@@ -4824,8 +4839,8 @@ async fn runtime_permission(
     if app.runtime_tokens.lock().await.get(id).map(String::as_str) != Some(token) {
         return Err(ApiError(anyhow!("invalid runtime token")));
     }
-    let manifest = app.plugins.lock().await.manifest(id)?;
-    if !manifest.permissions.iter().any(|item| item == permission) {
+    let permissions = app.plugins.lock().await.permissions(id)?;
+    if !permissions.iter().any(|item| item == permission) {
         return Err(ApiError(anyhow!("package lacks {permission} permission")));
     }
     Ok(())
@@ -5098,7 +5113,7 @@ async fn post_bluetooth_action(
 
 async fn get_volume() -> Result<Json<VolumeResponse>, ApiError> {
     Ok(Json(VolumeResponse {
-        percent: current_volume()?,
+        percent: volume_io::read_current(current_volume).await?,
     }))
 }
 
@@ -5107,7 +5122,7 @@ async fn set_volume(Json(request): Json<VolumeRequest>) -> Result<Json<VolumeRes
         return Err(ApiError(anyhow!("volume must be 0..100")));
     }
     Ok(Json(VolumeResponse {
-        percent: set_volume_backend(request.percent, false)?,
+        percent: volume_io::dispatch(move || set_volume_backend(request.percent, false)).await?,
     }))
 }
 
@@ -5121,10 +5136,12 @@ async fn change_volume(
     if step == 0 || step > 100 {
         return Err(ApiError(anyhow!("volume step must be 1..100")));
     }
-    let current = current_volume()? as i16;
-    let next = (current + direction * i16::from(step)).clamp(0, 100) as u8;
     Ok(Json(VolumeResponse {
-        percent: set_volume_backend(next, false)?,
+        percent: volume_io::dispatch(move || {
+            let current = current_volume()? as i16;
+            let next = (current + direction * i16::from(step)).clamp(0, 100) as u8;
+            set_volume_backend(next, false)
+        }).await?,
     }))
 }
 
@@ -5141,9 +5158,11 @@ async fn volume_down(
 }
 
 async fn set_mute(muted: bool) -> Result<Json<VolumeResponse>, ApiError> {
-    let percent = current_volume()?;
     Ok(Json(VolumeResponse {
-        percent: set_volume_backend(percent, muted)?,
+        percent: volume_io::dispatch(move || {
+            let percent = current_volume()?;
+            set_volume_backend(percent, muted)
+        }).await?,
     }))
 }
 
@@ -5796,7 +5815,7 @@ pub async fn run_with_station(station: Option<StationSpec>) -> Result<()> {
             yam_run,
         )?)),
         runtime_tokens: Arc::new(Mutex::new(HashMap::new())),
-        speech_readers: Arc::new(Mutex::new(HashMap::new())),
+        speech_readers: Arc::new(Mutex::new(HashMap::new())), alice_readers: Arc::new(Mutex::new(HashMap::new())),
         speech_claims: Arc::new(Mutex::new(HashMap::new())),
         providers: Arc::new(Mutex::new(providers::Broker::default())),
         custom_web: Arc::new(Mutex::new(HashMap::new())),
@@ -5913,6 +5932,9 @@ pub async fn run_with_station(station: Option<StationSpec>) -> Result<()> {
             .route("/api/runtime/:id/provider/next", post(providers::poll))
             .route("/api/runtime/:id/provider/result", post(providers::result))
             .route("/api/runtime/:id/media", get(media::capabilities))
+            .route("/api/runtime/:id/input/alice/next", post(alice_input::next))
+            .route("/api/runtime/:id/native-player/pause", post(media::native_pause))
+            .route("/api/runtime/:id/native-player/release", post(media::native_release))
             .route("/api/runtime/:id/speech/next", post(media::speech))
             .route(
                 "/api/runtime/:id/command/cancel",
@@ -6576,7 +6598,7 @@ mod lifecycle_tests {
             device: Arc::new(Mutex::new(DeviceProfile { model: "test".into(), architecture: "x86_64".into(), features: vec![], source: "test".into(), led: LedTopology::default() })),
             led: Arc::new(Led { settings: Arc::new(Mutex::new(LedSettings::default())), backend: None, color_order: ColorOrder::Rgb, topology: LedTopology::default() }),
             microphone: None, clock: None, plugins: Arc::new(Mutex::new(manager)),
-            runtime_tokens: Arc::new(Mutex::new(HashMap::new())), speech_readers: Arc::new(Mutex::new(HashMap::new())), speech_claims: Arc::new(Mutex::new(HashMap::new())),
+            runtime_tokens: Arc::new(Mutex::new(HashMap::new())), speech_readers: Arc::new(Mutex::new(HashMap::new())), alice_readers: Arc::new(Mutex::new(HashMap::new())), speech_claims: Arc::new(Mutex::new(HashMap::new())),
             providers: Arc::new(Mutex::new(providers::Broker::default())),
             custom_web: Arc::new(Mutex::new(HashMap::new())),
             runtime_api_url: "http://127.0.0.1:1".into(), input_actions: &[], input_gestures: &[], gpio_inputs: &[],
@@ -6616,6 +6638,34 @@ mod lifecycle_tests {
         assert!(app.plugins.lock().await.running.is_empty());
         assert!(app.runtime_tokens.lock().await.is_empty());
         assert!(start_package(app.clone(), "test-service".into(), vec![]).await.is_err());
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn cached_manifest_preserves_permission_and_token_revocation() {
+        let (app, package) = fixture().await;
+        let id = "test-service";
+        let token = app.runtime_tokens.lock().await.get(id).unwrap().clone();
+        let mut headers = HeaderMap::new();
+        headers.insert("x-luna-token", token.parse().unwrap());
+        runtime_permission(&app, id, &headers, "exec").await.unwrap();
+        // Same invocation, same descriptor path: policy edits must immediately
+        // apply even after a successful, cached authorization.
+        let path = package.join("plugin.toml");
+        let original = fs::read_to_string(&path).unwrap();
+        let changed = original.replace("permissions=['exec']", "permissions=['clock']");
+        assert_ne!(changed, original);
+        fs::write(&path, &changed).unwrap();
+        assert!(runtime_permission(&app, id, &headers, "exec").await.is_err());
+        runtime_permission(&app, id, &headers, "clock").await.unwrap();
+        fs::write(&path, changed.replace("kind='binary'", "kind=42")).unwrap();
+        assert!(runtime_permission(&app, id, &headers, "clock").await.is_err());
+        fs::write(&path, original).unwrap();
+        runtime_permission(&app, id, &headers, "exec").await.unwrap();
+        // A cache hit must not bypass invocation-token revocation.
+        app.runtime_tokens.lock().await.remove(id);
+        assert!(runtime_permission(&app, id, &headers, "exec").await.is_err());
+        stop_all_packages(&app).await;
         fs::remove_dir_all(&app.root).unwrap();
     }
 
