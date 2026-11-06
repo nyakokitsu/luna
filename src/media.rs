@@ -144,7 +144,9 @@ pub async fn capabilities(
     let led_count = a.led.settings.lock().await.count;
     Ok(Json(
         serde_json::json!({"version":1,"speech":has("ipc.speech"),
-        "commands":has("commands"),"led":has("led"),"led_count":led_count}),
+        "commands":has("commands"),"led":has("led"),"led_count":led_count,
+        "native_player":has("media.native") && native_player::available(),
+        "alice_button":has("input.alice") && alice_input::available()}),
     ))
 }
 pub async fn speech(
@@ -306,4 +308,28 @@ mod tests {
         assert_eq!(event["transcript"], "громче");
         assert_eq!(event["final"], true);
     }
+}
+
+// A targeted stock-player operation. The provider broker is deliberately not
+// consulted, so selecting AirPlay cannot redirect this pause back to AirPlay.
+pub async fn native_pause(
+    State(a): State<App>, AxumPath(id): AxumPath<String>, headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    native_action(a, id, headers, false).await
+}
+pub async fn native_release(
+    State(a): State<App>, AxumPath(id): AxumPath<String>, headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    native_action(a, id, headers, true).await
+}
+async fn native_action(a: App, id: String, headers: HeaderMap, release: bool)
+ -> Result<Json<serde_json::Value>, ApiError> {
+    runtime_permission(&a, &id, &headers, "exec").await?;
+    runtime_permission(&a, &id, &headers, "media.native").await?;
+    let token = runtime_token(&headers)?;
+    let owner = format!("{}:{:x}", id, Sha256::digest(token.as_bytes()));
+    task::spawn_blocking(move || {
+        if release { native_player::release(owner) } else { native_player::pause(owner) }
+    }).await??;
+    Ok(Json(serde_json::json!({"submitted":true})))
 }
