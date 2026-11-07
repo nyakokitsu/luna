@@ -513,6 +513,9 @@ struct AliceCommandQuery {
     timeout_ms: Option<u64>,
     #[serde(default)]
     cancel: bool,
+    /// Answer an idle poll with 204 No Content instead of a 400 error.
+    #[serde(default)]
+    empty_on_timeout: bool,
 }
 #[derive(Debug, Serialize)]
 struct InputDeviceInfo {
@@ -583,23 +586,41 @@ async fn record_microphone(
         .map_err(ApiError)
 }
 
+/// A poll that saw no event is a normal outcome. By default it keeps the
+/// historical 400 error; clients that ask for it get 204 No Content instead,
+/// which cannot be confused with a rejected request.
+fn alice_poll_response(
+    event: Option<serde_json::Value>,
+    idle_message: &str,
+    empty_on_timeout: bool,
+) -> Result<Response, ApiError> {
+    match event {
+        Some(event) => Ok(Json(event).into_response()),
+        None if empty_on_timeout => Ok(StatusCode::NO_CONTENT.into_response()),
+        None => Err(ApiError(anyhow!("{idle_message}"))),
+    }
+}
+
 async fn get_alice_command(
     Query(query): Query<AliceCommandQuery>,
-) -> Result<Json<serde_json::Value>, ApiError> {
+) -> Result<Response, ApiError> {
     let timeout_ms = query.timeout_ms.unwrap_or(60_000).min(60_000);
     let event = task::spawn_blocking(move || wait_alice_speech(timeout_ms, true))
         .await
-        .context("Alice command reader task failed")??
-        .context("timeout waiting for an Alice command")?;
-    if query.cancel {
+        .context("Alice command reader task failed")??;
+    if event.is_some() && query.cancel {
         cancel_alice_dialog()?;
     }
-    Ok(Json(event))
+    alice_poll_response(
+        event,
+        "timeout waiting for an Alice command",
+        query.empty_on_timeout,
+    )
 }
 
 async fn get_alice_speech(
-    Query(query): Query<InputQuery>,
-) -> Result<Json<serde_json::Value>, ApiError> {
+    Query(query): Query<AliceCommandQuery>,
+) -> Result<Response, ApiError> {
     let timeout_ms = query.timeout_ms.unwrap_or(60_000).min(60_000);
     let cancel = query.cancel;
     // Expose interim STT updates normally. In cancel mode the purpose is to
@@ -607,31 +628,35 @@ async fn get_alice_speech(
     // the first non-empty partial transcript rather than waiting for final.
     let event = task::spawn_blocking(move || wait_alice_speech(timeout_ms, false))
         .await
-        .context("Alice speech reader task failed")??
-        .context("timeout waiting for speech")?;
-    if cancel {
+        .context("Alice speech reader task failed")??;
+    if event.is_some() && cancel {
         task::spawn_blocking(cancel_alice_dialog)
             .await
             .context("Alice speech cancel task failed")??;
     }
-    Ok(Json(event))
+    alice_poll_response(event, "timeout waiting for speech", query.empty_on_timeout)
 }
 
 /// Starts the station recognizer in recognition-only mode and returns the
 /// final transcript. Unlike the regular Alice speech endpoint this does not
 /// start a cloud dialog or wait for an Alice response.
 async fn recognize_alice_speech(
-    Query(query): Query<InputQuery>,
-) -> Result<Json<serde_json::Value>, ApiError> {
+    Query(query): Query<AliceCommandQuery>,
+) -> Result<Response, ApiError> {
     let timeout_ms = query.timeout_ms.unwrap_or(60_000).min(60_000);
     task::spawn_blocking(start_alice_recognition)
         .await
         .context("Alice recognition start task failed")??;
-    let event = task::spawn_blocking(move || wait_alice_speech(timeout_ms, true))
+    // A recognition result must belong to the request just started, so it
+    // never reuses a shared stream that may hold older events.
+    let event = task::spawn_blocking(move || wait_alice_speech_fresh(timeout_ms, true))
         .await
-        .context("Alice recognition reader task failed")??
-        .context("timeout waiting for recognition")?;
-    Ok(Json(event))
+        .context("Alice recognition reader task failed")??;
+    alice_poll_response(
+        event,
+        "timeout waiting for recognition",
+        query.empty_on_timeout,
+    )
 }
 
 async fn cancel_alice_speech() -> Result<StatusCode, ApiError> {
@@ -2887,9 +2912,142 @@ fn ipc_next(service: &str, timeout_ms: u64) -> Result<Option<serde_json::Value>>
     Ok(None)
 }
 
+/// How long an idle aliced event stream stays open for the next poll. Short
+/// polls issued back to back then see events that arrive between them; a
+/// caller that comes back later starts a fresh stream and never receives an
+/// old phrase. Matches the idle window of the runtime speech reader.
+const ALICE_STREAM_LEASE: Duration = Duration::from_secs(3);
+
+/// One event stream shared by /api/alice/command and /api/alice/speech.
+/// aliced ties events to the connection and does not replay them, so closing
+/// the stream after every poll drops anything said before the next poll.
+struct AliceStream {
+    endpoint: SocketAddr,
+    stream: TcpStream,
+    /// Bytes of a frame that a timed-out poll had only partly read.
+    buffered: Vec<u8>,
+    idle_since: Instant,
+}
+
+static ALICE_STREAM: std::sync::Mutex<Option<AliceStream>> = std::sync::Mutex::new(None);
+
+impl AliceStream {
+    fn next_frame(&mut self, deadline: Instant) -> Result<Option<Vec<u8>>> {
+        loop {
+            if self.buffered.len() >= 4 {
+                let size = ipc_frame_length(self.buffered[..4].try_into()?)?;
+                if self.buffered.len() >= size + 4 {
+                    let frame = self.buffered[4..size + 4].to_vec();
+                    self.buffered.drain(..size + 4);
+                    validate_quasar_message(&frame)?;
+                    return Ok(Some(frame));
+                }
+            }
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return Ok(None);
+            }
+            self.stream.set_read_timeout(Some(left))?;
+            let mut bytes = [0u8; 4096];
+            match self.stream.read(&mut bytes) {
+                Ok(0) => bail!("Alice IPC disconnected"),
+                Ok(count) => self.buffered.extend_from_slice(&bytes[..count]),
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                    ) =>
+                {
+                    return Ok(None)
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+    }
+}
+
+fn wait_alice_speech_on(
+    slot: &mut Option<AliceStream>,
+    endpoint: SocketAddr,
+    deadline: Instant,
+    final_only: bool,
+) -> Result<Option<serde_json::Value>> {
+    if slot.as_ref().is_some_and(|open| {
+        open.endpoint != endpoint || open.idle_since.elapsed() > ALICE_STREAM_LEASE
+    }) {
+        *slot = None;
+    }
+    let mut retried = false;
+    loop {
+        let reused = slot.is_some();
+        if slot.is_none() {
+            let Some(stream) = connect_ipc(endpoint, deadline)? else {
+                return Ok(None);
+            };
+            *slot = Some(AliceStream {
+                endpoint,
+                stream,
+                buffered: Vec::new(),
+                idle_since: Instant::now(),
+            });
+        }
+        let open = slot.as_mut().expect("stream was just opened");
+        let frame = open.next_frame(deadline);
+        open.idle_since = Instant::now();
+        match frame {
+            Ok(Some(frame)) => match decode_ipc_event("aliced", &frame) {
+                Ok(Some(event))
+                    if !final_only
+                        || event.get("final").and_then(serde_json::Value::as_bool)
+                            == Some(true) =>
+                {
+                    return Ok(Some(event))
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    *slot = None;
+                    return Err(error);
+                }
+            },
+            Ok(None) => return Ok(None),
+            Err(error) => {
+                *slot = None;
+                // A kept stream can go stale (aliced restarted): reconnect once.
+                if reused && !retried {
+                    retried = true;
+                    continue;
+                }
+                return Err(error);
+            }
+        }
+    }
+}
+
 /// Wait for the next speech event from aliced. BetterYAM's command listener
-/// accepts both `voice` and `command` events and matches the transcript itself.
+/// accepts both voice and command events and matches the transcript itself.
 fn wait_alice_speech(timeout_ms: u64, final_only: bool) -> Result<Option<serde_json::Value>> {
+    let deadline = Instant::now() + Duration::from_millis(timeout_ms.max(1));
+    let endpoint = ipc_endpoint("aliced")?;
+    match ALICE_STREAM.try_lock() {
+        Ok(mut slot) => wait_alice_speech_on(&mut slot, endpoint, deadline, final_only),
+        Err(std::sync::TryLockError::Poisoned(poisoned)) => {
+            let mut slot = poisoned.into_inner();
+            *slot = None;
+            wait_alice_speech_on(&mut slot, endpoint, deadline, final_only)
+        }
+        // Another poll already owns the shared stream: use a private one so
+        // concurrent clients never wait for each other.
+        Err(std::sync::TryLockError::WouldBlock) => {
+            wait_alice_speech_on(&mut None, endpoint, deadline, final_only)
+        }
+    }
+}
+
+/// Same as wait_alice_speech on a new connection that is closed afterwards.
+fn wait_alice_speech_fresh(
+    timeout_ms: u64,
+    final_only: bool,
+) -> Result<Option<serde_json::Value>> {
     let deadline = Instant::now() + Duration::from_millis(timeout_ms.max(1));
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
@@ -6390,6 +6548,169 @@ mod tests {
         let event = decode_ipc_event("aliced", &message).unwrap().unwrap();
         assert_eq!(event["source"], "command");
         assert_eq!(event["transcript"], "громче");
+    }
+
+    // ---- /api/alice/command and /api/alice/speech long-poll behaviour ------------------
+    // A fake aliced models the property documented in ipc_next(): events go only to
+    // connections that are open when they are emitted, and are never replayed.
+    static ALICED_ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    fn reset_alice_stream() {
+        *ALICE_STREAM.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+
+    fn aliced_final_frame(text: &str) -> Vec<u8> {
+        let mut state = Vec::new();
+        push_bytes(&mut state, 2, text.as_bytes());
+        let mut request = Vec::new();
+        push_varint(&mut request, 2 << 3);
+        push_varint(&mut request, 1);
+        push_bytes(&mut state, 15, &request);
+        let mut message = Vec::new();
+        push_bytes(&mut message, 3, &state);
+        let mut frame = (message.len() as i32).to_le_bytes().to_vec();
+        frame.extend(message);
+        frame
+    }
+
+    struct FakeAliced {
+        clients: Arc<std::sync::Mutex<Vec<TcpStream>>>,
+        _serial: std::sync::MutexGuard<'static, ()>,
+    }
+    impl FakeAliced {
+        fn start() -> Self {
+            let serial = ALICED_ENV.lock().unwrap_or_else(|e| e.into_inner());
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let clients = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let accepted = clients.clone();
+            std::thread::spawn(move || {
+                for stream in listener.incoming().flatten() {
+                    accepted.lock().unwrap().push(stream);
+                }
+            });
+            std::env::set_var("LUNA_ALICED_ADDR", address.to_string());
+            reset_alice_stream();
+            Self { clients, _serial: serial }
+        }
+        fn wait_clients(&self, count: usize) {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while self.clients.lock().unwrap().len() < count {
+                assert!(Instant::now() < deadline, "poll never connected to aliced");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+        fn emit(&self, bytes: &[u8]) {
+            for client in self.clients.lock().unwrap().iter_mut() {
+                let _ = client.write_all(bytes);
+            }
+        }
+    }
+    impl Drop for FakeAliced {
+        fn drop(&mut self) {
+            std::env::remove_var("LUNA_ALICED_ADDR");
+            reset_alice_stream();
+        }
+    }
+
+    #[test]
+    fn speech_sent_between_short_polls_is_not_lost() {
+        let aliced = FakeAliced::start();
+        let first = std::thread::scope(|scope| {
+            let poll = scope.spawn(|| wait_alice_speech(2_000, true));
+            aliced.wait_clients(1);
+            aliced.emit(&aliced_final_frame("first"));
+            poll.join().unwrap()
+        })
+        .unwrap()
+        .expect("first event");
+        assert_eq!(first["transcript"], "first");
+        // The next poll has not started yet; aliced speaks in the gap.
+        aliced.emit(&aliced_final_frame("second"));
+        let second = wait_alice_speech(1_000, true)
+            .unwrap()
+            .expect("event emitted between two polls was lost");
+        assert_eq!(second["transcript"], "second");
+    }
+
+    #[test]
+    fn partial_frame_survives_a_poll_timeout() {
+        let aliced = FakeAliced::start();
+        let frame = aliced_final_frame("whole");
+        let (head, tail) = frame.split_at(6);
+        let first = std::thread::scope(|scope| {
+            let poll = scope.spawn(|| wait_alice_speech(300, true));
+            aliced.wait_clients(1);
+            aliced.emit(head);
+            poll.join().unwrap()
+        })
+        .unwrap();
+        assert!(first.is_none());
+        aliced.emit(tail);
+        let second = wait_alice_speech(1_000, true)
+            .unwrap()
+            .expect("a timed-out poll corrupted the frame it was reading");
+        assert_eq!(second["transcript"], "whole");
+    }
+
+    #[test]
+    fn idle_stream_does_not_replay_old_events() {
+        let aliced = FakeAliced::start();
+        assert!(wait_alice_speech(50, true).unwrap().is_none());
+        aliced.emit(&aliced_final_frame("stale"));
+        // Longer than the 3 s lease: a resumed caller must not get an old phrase.
+        std::thread::sleep(Duration::from_millis(3_400));
+        assert!(wait_alice_speech(200, true).unwrap().is_none());
+    }
+
+    #[test]
+    fn concurrent_polls_each_receive_the_event() {
+        let aliced = FakeAliced::start();
+        std::thread::scope(|scope| {
+            let long = scope.spawn(|| wait_alice_speech(2_000, true));
+            aliced.wait_clients(1);
+            let other = scope.spawn(|| wait_alice_speech(2_000, true));
+            aliced.wait_clients(2);
+            aliced.emit(&aliced_final_frame("both"));
+            assert_eq!(long.join().unwrap().unwrap().unwrap()["transcript"], "both");
+            assert_eq!(other.join().unwrap().unwrap().unwrap()["transcript"], "both");
+        });
+    }
+
+    #[tokio::test]
+    async fn command_poll_timeout_is_empty_only_when_requested() {
+        let _aliced = FakeAliced::start();
+        let query = |text: &str| {
+            Query::<AliceCommandQuery>::try_from_uri(&format!("/?{text}").parse().unwrap()).unwrap()
+        };
+        let default = get_alice_command(query("timeout_ms=50")).await.into_response();
+        assert_eq!(default.status(), StatusCode::BAD_REQUEST);
+        let empty = get_alice_command(query("timeout_ms=50&empty_on_timeout=true"))
+            .await
+            .into_response();
+        assert_eq!(empty.status(), StatusCode::NO_CONTENT);
+        let speech = get_alice_speech(query("timeout_ms=50&empty_on_timeout=true"))
+            .await
+            .into_response();
+        assert_eq!(speech.status(), StatusCode::NO_CONTENT);
+        let speech_default = get_alice_speech(query("timeout_ms=50")).await.into_response();
+        assert_eq!(speech_default.status(), StatusCode::BAD_REQUEST);
+        let recognition = recognize_alice_speech(query("timeout_ms=50&empty_on_timeout=true"))
+            .await
+            .into_response();
+        assert_eq!(recognition.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn recognition_never_returns_events_buffered_for_other_polls() {
+        let aliced = FakeAliced::start();
+        // A poll leaves the shared stream open, then aliced says something.
+        assert!(wait_alice_speech(50, true).unwrap().is_none());
+        aliced.emit(&aliced_final_frame("older phrase"));
+        let query =
+            Query::<AliceCommandQuery>::try_from_uri(&"/?timeout_ms=150&empty_on_timeout=true".parse().unwrap())
+                .unwrap();
+        let response = recognize_alice_speech(query).await.into_response();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
     }
 
     #[test]
