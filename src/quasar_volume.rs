@@ -40,15 +40,22 @@ fn verified() -> bool {
     })
 }
 
-// Keep firmware qualification independent of filesystem state so unqualified
-// builds and look-alike DT names can be rejected before opening IPC sockets.
+// Keep board qualification independent of filesystem state so look-alike DT
+// names can be rejected before opening IPC sockets. The native protocol is
+// selected per board, not per firmware build: any non-empty version on the
+// exact Bergamot board may try it, and set() still waits for the logical-state
+// acknowledgement before reporting success.
 fn verified_build(build: &str, compatible: &[u8]) -> bool {
-    // Mini 3: verified against logical stereo_pair state and VolumeSet ACKs
-    // on the stock 2026-10-21 firmware, including a 5 -> 0 -> 5% round trip.
-    if build == "0.369.1.50.4794652521.20261021.117" {
-        return compatible
+    // Mini 3: the protocol was verified against logical stereo_pair state and
+    // VolumeSet ACKs on the stock 2026-10-21 firmware, including a 5 -> 0 -> 5%
+    // round trip. Other builds on the same board are allowed to try the same
+    // protocol; an unsupported build fails the ACK and falls back to ALSA.
+    if !build.is_empty()
+        && compatible
             .split(|byte| *byte == 0)
-            .any(|entry| entry == b"yandex,bergamot");
+            .any(|entry| entry == b"yandex,bergamot")
+    {
+        return true;
     }
     if build == "0.369.1.46.4793643989.20261020.299" {
         return compatible
@@ -345,13 +352,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn mini3_requires_exact_firmware_and_dt_entry() {
-        let build = "0.369.1.50.4794652521.20261021.117";
-        assert!(verified_build(
-            build,
-            b"yandex,bergamot-evt1\0yandex,bergamot\0amlogic, axg\0"
-        ));
-        assert!(verified_build(build, b"yandex,bergamot\0"));
+    fn mini3_accepts_any_version_on_the_bergamot_board() {
+        for build in [
+            "0.369.1.50.4794652521.20261021.117",
+            "0.369.1.50.4794652521.20261021.116",
+            "0.369.1.50.4794652521.20261021.117-extra",
+            "0.369.1.50.4794652521.20270101.999",
+        ] {
+            assert!(verified_build(
+                build,
+                b"yandex,bergamot-evt1\0yandex,bergamot\0amlogic, axg\0"
+            ));
+            assert!(verified_build(build, b"yandex,bergamot\0"));
+        }
         for board in [
             &b""[..],
             &b"yandex,station-mini2\0"[..],
@@ -359,15 +372,9 @@ mod tests {
             &b"prefix-yandex,bergamot\0"[..],
             &b"yandex,bergamot-suffix\0"[..],
         ] {
-            assert!(!verified_build(build, board));
+            assert!(!verified_build("0.369.1.50.4794652521.20261021.117", board));
         }
-        for build in [
-            "0.369.1.50.4794652521.20261021.116",
-            "0.369.1.50.4794652521.20261021.117-extra",
-            "",
-        ] {
-            assert!(!verified_build(build, b"yandex,bergamot\0"));
-        }
+        assert!(!verified_build("", b"yandex,bergamot\0"));
     }
 
     #[test]

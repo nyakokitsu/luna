@@ -7,11 +7,18 @@ from the native-volume allowlist. ALSA writes changed playback loudness without
 updating Quasar's logical volume, so the first hardware volume-button press
 could jump to Quasar's retained level.
 
-Qualify only firmware `0.369.1.50.4794652521.20261021.117` with the exact
-NUL-separated device-tree entry `yandex,bergamot`. Similar board names and
-different firmware remain rejected. The existing protocol is unchanged:
-read logical state from `stereo_pair`, send VolumeSet through
-`iohub_clients`, and wait for the logical-state acknowledgement.
+Select the backend by the exact NUL-separated device-tree entry
+`yandex,bergamot`, not by the firmware build string. Any non-empty
+`version_full` on that board may try the existing native protocol. Similar
+board names remain rejected. The protocol is unchanged: read logical state
+from `stereo_pair`, send VolumeSet through `iohub_clients`, and wait for the
+logical-state acknowledgement. A build that does not implement the protocol
+fails the acknowledgement and falls back to `maind`/ALSA, exactly as before.
+
+The 7 November validation below still covers only
+`0.369.1.50.4794652521.20261021.117`; other builds are not individually
+tested. The change removes the build-string gate, not the requirement to
+verify the write acknowledgement.
 
 ## Validation on 7 November 2026
 
