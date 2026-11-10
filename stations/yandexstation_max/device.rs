@@ -12,7 +12,8 @@ pub fn spec() -> StationSpec {
         led_profile: "stationmax",
         led_count: 24,
         led_topology: LedTopology { ring_count: 24, ..LedTopology::default() },
-        color_order: luna::ColorOrder::Rgb,
+        // Owner-observed on Max: bytes in fb5 are interpreted as B, G, R.
+        color_order: luna::ColorOrder::Bgr,
         create_led_backend: hardware::create_led_backend,
         create_microphone_backend: || None,
         create_clock_backend: || None,
@@ -20,5 +21,13 @@ pub fn spec() -> StationSpec {
         input_actions: &[],
         input_gestures: &[],
         gpio_inputs: &[],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn ring_uses_owner_observed_bgr_order() {
+        assert!(matches!(super::spec().color_order, luna::ColorOrder::Bgr));
     }
 }
