@@ -1,3 +1,4 @@
+#[path = "hardware.rs"]
 mod hardware;
 use luna::{LedTopology, StationSpec};
 
