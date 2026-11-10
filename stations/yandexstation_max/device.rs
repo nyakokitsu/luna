@@ -1,6 +1,10 @@
 mod hardware;
 use luna::{LedTopology, StationSpec};
 
+pub fn preflight() -> anyhow::Result<()> {
+    hardware::preflight()
+}
+
 pub fn spec() -> StationSpec {
     StationSpec {
         model: "yandexstation_max",

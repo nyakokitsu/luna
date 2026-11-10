@@ -13,6 +13,16 @@ fn check(root: &Path) -> Result<()> {
     Ok(())
 }
 
+pub fn preflight() -> Result<()> {
+    check(Path::new("/sys/class/graphics/fb5"))?;
+    let screen = Path::new("/sys/class/graphics/fb4");
+    for (file, expected) in [("name", "YNDX LED screen"), ("virtual_size", "25,16"), ("bits_per_pixel", "24"), ("stride", "75")] {
+        let value = fs::read_to_string(screen.join(file)).with_context(|| format!("read screen {file}"))?;
+        if value.trim() != expected { bail!("unexpected Max screen {file}: {:?}", value.trim()); }
+    }
+    Ok(())
+}
+
 pub fn create_led_backend() -> Result<Box<dyn LedBackend>> {
     check(Path::new("/sys/class/graphics/fb5"))?;
     let file = File::options().read(true).write(true).open("/dev/graphics/fb5")?;
