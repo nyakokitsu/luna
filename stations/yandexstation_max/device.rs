@@ -1,5 +1,7 @@
 #[path = "hardware.rs"]
 mod hardware;
+#[path = "clock.rs"]
+mod clock;
 use luna::{LedTopology, StationSpec};
 
 pub fn preflight() -> anyhow::Result<()> {
@@ -16,7 +18,7 @@ pub fn spec() -> StationSpec {
         color_order: luna::ColorOrder::Bgr,
         create_led_backend: hardware::create_led_backend,
         create_microphone_backend: || None,
-        create_clock_backend: || None,
+        create_clock_backend: clock::create_clock_backend,
         capabilities: &["led.ring.rgb", "led.ring.24", "led.pattern.v1"],
         input_actions: &[],
         input_gestures: &[],
