@@ -1145,6 +1145,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "luna-yandexstation-max"
+version = "0.2.7"
+dependencies = [
+ "anyhow",
+ "luna",
+]
+
+[[package]]
 name = "lzma-rs"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
