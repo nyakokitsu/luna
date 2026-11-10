@@ -14,8 +14,11 @@ fn check(root: &Path) -> Result<()> {
 }
 
 pub fn preflight() -> Result<()> {
-    check(Path::new("/sys/class/graphics/fb5"))?;
-    let screen = Path::new("/sys/class/graphics/fb4");
+    check_pair(Path::new("/sys/class/graphics/fb5"), Path::new("/sys/class/graphics/fb4"))
+}
+
+fn check_pair(ring: &Path, screen: &Path) -> Result<()> {
+    check(ring)?;
     for (file, expected) in [("name", "YNDX LED screen"), ("virtual_size", "25,16"), ("bits_per_pixel", "24"), ("stride", "75")] {
         let value = fs::read_to_string(screen.join(file)).with_context(|| format!("read screen {file}"))?;
         if value.trim() != expected { bail!("unexpected Max screen {file}: {:?}", value.trim()); }
@@ -68,6 +71,21 @@ mod tests {
         assert!(check(&dir).is_ok());
         fs::write(dir.join("stride"), "96").unwrap();
         assert!(check(&dir).is_err());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn preflight_rejects_unexpected_screen_even_when_ring_matches() {
+        let dir = std::env::temp_dir().join(format!("luna-max-pair-{}", std::process::id()));
+        let ring = dir.join("ring");
+        let screen = dir.join("screen");
+        fs::create_dir_all(&ring).unwrap();
+        fs::create_dir_all(&screen).unwrap();
+        for (key, value) in [("name", "YNDX LED ring"), ("virtual_size", "24,1"), ("bits_per_pixel", "24"), ("stride", "72")] { fs::write(ring.join(key), value).unwrap(); }
+        for (key, value) in [("name", "YNDX LED screen"), ("virtual_size", "25,16"), ("bits_per_pixel", "24"), ("stride", "75")] { fs::write(screen.join(key), value).unwrap(); }
+        assert!(check_pair(&ring, &screen).is_ok());
+        fs::write(screen.join("name"), "OSD FB").unwrap();
+        assert!(check_pair(&ring, &screen).is_err());
         fs::remove_dir_all(dir).unwrap();
     }
 
