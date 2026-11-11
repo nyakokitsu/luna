@@ -10,4 +10,5 @@ path = "station_main.rs"
 [dependencies]
 anyhow = "1"
 luna = { path = "../.." }
+serde_json = "1"
 
