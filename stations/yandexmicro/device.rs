@@ -15,6 +15,7 @@ pub fn spec() -> StationSpec {
             ..LedTopology::default()
         },
         color_order: luna::ColorOrder::Rgb,
+        led_calibration: None,
         create_led_backend: hardware::create_led_backend,
         create_microphone_backend: || None,
         create_clock_backend: || None,

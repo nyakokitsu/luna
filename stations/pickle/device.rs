@@ -51,6 +51,7 @@ pub fn spec() -> StationSpec {
             logo_count: 6,
         },
         color_order: luna::ColorOrder::Rgb,
+        led_calibration: None,
         create_led_backend: hardware::create_led_backend,
         create_microphone_backend: || luna::create_quasar_microphone_backend_with_channels(3),
         create_clock_backend: clock::create_clock_backend,

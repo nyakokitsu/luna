@@ -163,10 +163,105 @@ pub trait ClockBackend: Send + Sync {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ColorOrder {
     Rgb,
     Bgr,
+}
+
+/// The stock LED calibration matrix shipped in
+/// `/system/vendor/quasar/ledconfigs/<profile>.json`.
+///
+/// It is applied to the logical RGB frame before the station's channel order.
+/// Each output pixel keeps the input peak, so a loud band does not clip into a
+/// permanently flat frame.
+#[derive(Debug, Clone, Copy)]
+struct LedCalibration {
+    matrix: [[f32; 3]; 3],
+}
+
+/// Verified Mini 2 red profile. Used only when the stock file is missing so a
+/// damaged vendor tree cannot silently reintroduce the blue cast.
+const MINI2_RED: [[f32; 3]; 3] = [
+    [0.229906108, -0.0894722889, -0.0280530642],
+    [0.0275730587, 5.49507443, 0.407274652],
+    [-0.000074085751, 0.0153779975, 1.00720711],
+];
+
+impl LedCalibration {
+    fn parse(raw: &str) -> Result<Self> {
+        #[derive(serde::Deserialize)]
+        struct File {
+            #[serde(rename = "type")]
+            kind: String,
+            matrix: Vec<Vec<f64>>,
+        }
+        let file: File = serde_json::from_str(raw).context("invalid LED calibration JSON")?;
+        if file.kind != "matrix" || file.matrix.len() != 3 {
+            bail!("LED calibration must be a 3x3 matrix");
+        }
+        let mut matrix = [[0f32; 3]; 3];
+        for (i, row) in file.matrix.iter().enumerate() {
+            if row.len() != 3 {
+                bail!("LED calibration row {i} must have three coefficients");
+            }
+            for (j, value) in row.iter().enumerate() {
+                let value = *value as f32;
+                if !value.is_finite() || value.abs() > 16.0 {
+                    bail!("invalid LED calibration coefficient");
+                }
+                matrix[i][j] = value;
+            }
+        }
+        Ok(Self { matrix })
+    }
+
+    fn apply(&self, r: u8, g: u8, b: u8) -> (u8, u8, u8) {
+        let source = [r as f32, g as f32, b as f32];
+        let peak = source[0].max(source[1]).max(source[2]);
+        let mut out = [0f32; 3];
+        for (i, row) in self.matrix.iter().enumerate() {
+            for (j, coefficient) in row.iter().enumerate() {
+                out[i] += coefficient * source[j];
+            }
+            out[i] = out[i].max(0.0);
+        }
+        let max = out[0].max(out[1]).max(out[2]);
+        if max > 0.0 {
+            for value in &mut out {
+                *value *= peak / max;
+            }
+        }
+        (
+            out[0].round().clamp(0.0, 255.0) as u8,
+            out[1].round().clamp(0.0, 255.0) as u8,
+            out[2].round().clamp(0.0, 255.0) as u8,
+        )
+    }
+}
+
+fn load_led_calibration(profile: &str) -> Option<LedCalibration> {
+    let path = format!("/system/vendor/quasar/ledconfigs/{profile}.json");
+    match fs::read_to_string(&path) {
+        Ok(raw) => match LedCalibration::parse(&raw) {
+            Ok(calibration) => Some(calibration),
+            Err(error) => {
+                tracing::warn!(%error, path, "invalid stock LED calibration; using built-in defaults");
+                builtin_led_calibration(profile)
+            }
+        },
+        Err(error) => {
+            tracing::warn!(%error, path, "stock LED calibration is unavailable; using built-in defaults");
+            builtin_led_calibration(profile)
+        }
+    }
+}
+
+fn builtin_led_calibration(profile: &str) -> Option<LedCalibration> {
+    match profile {
+        "red" => Some(LedCalibration { matrix: MINI2_RED }),
+        _ => None,
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
@@ -211,6 +306,9 @@ pub struct StationSpec {
     pub led_count: usize,
     pub led_topology: LedTopology,
     pub color_order: ColorOrder,
+    /// Stock `ledconfigs` profile applied before `color_order`. `None` means
+    /// the model needs no correction.
+    pub led_calibration: Option<&'static str>,
     pub create_led_backend: fn() -> Result<Box<dyn LedBackend>>,
     pub create_microphone_backend: fn() -> Option<Box<dyn MicrophoneBackend>>,
     pub create_clock_backend: fn() -> Option<Box<dyn ClockBackend>>,
@@ -842,6 +940,7 @@ struct Led {
     settings: Arc<Mutex<LedSettings>>,
     backend: Option<Arc<dyn LedBackend>>,
     color_order: ColorOrder,
+    calibration: Option<LedCalibration>,
     topology: LedTopology,
 }
 #[derive(Deserialize)]
@@ -937,6 +1036,10 @@ impl Led {
             let mut frame = Vec::with_capacity(colors.len() * 3);
             for hex in colors {
                 let (r, g, b) = parse_color(&hex)?;
+                let (r, g, b) = match &self.calibration {
+                    Some(calibration) => calibration.apply(r, g, b),
+                    None => (r, g, b),
+                };
                 match self.color_order {
                     ColorOrder::Rgb => frame.extend([r, g, b]),
                     ColorOrder::Bgr => frame.extend([b, g, r]),
@@ -5975,6 +6078,9 @@ pub async fn run_with_station(station: Option<StationSpec>) -> Result<()> {
         color_order: station
             .map(|spec| spec.color_order)
             .unwrap_or(ColorOrder::Rgb),
+        calibration: station
+            .and_then(|spec| spec.led_calibration)
+            .and_then(load_led_calibration),
         topology: station.map(|spec| spec.led_topology).unwrap_or_default(),
     });
     let microphone = station
@@ -7096,7 +7202,7 @@ mod lifecycle_tests {
         let app = App {
             root, settings: Arc::new(Mutex::new(settings)),
             device: Arc::new(Mutex::new(DeviceProfile { model: "test".into(), architecture: "x86_64".into(), features: vec![], source: "test".into(), led: LedTopology::default() })),
-            led: Arc::new(Led { settings: Arc::new(Mutex::new(LedSettings::default())), backend: None, color_order: ColorOrder::Rgb, topology: LedTopology::default() }),
+            led: Arc::new(Led { settings: Arc::new(Mutex::new(LedSettings::default())), backend: None, color_order: ColorOrder::Rgb, calibration: None, topology: LedTopology::default() }),
             microphone: None, clock: None, plugins: Arc::new(Mutex::new(manager)),
             runtime_tokens: Arc::new(Mutex::new(HashMap::new())), speech_readers: Arc::new(Mutex::new(HashMap::new())), alice_readers: Arc::new(Mutex::new(HashMap::new())), speech_claims: Arc::new(Mutex::new(HashMap::new())),
             providers: Arc::new(Mutex::new(providers::Broker::default())),
@@ -7334,4 +7440,45 @@ mod lifecycle_tests {
         fs::remove_dir_all(&app.root).unwrap();
     }
 
+}
+
+#[cfg(test)]
+mod led_calibration_tests {
+    use super::*;
+
+    #[test]
+    fn red_calibration_keeps_white_peak_and_removes_blue_cast() {
+        let calibration = LedCalibration { matrix: MINI2_RED };
+        let (r, g, b) = calibration.apply(255, 255, 255);
+        assert!(r <= 8, "red {r}");
+        assert_eq!(g, 255);
+        assert!((40..=48).contains(&b), "blue {b}");
+    }
+
+    #[test]
+    fn calibration_preserves_pcm_intensity() {
+        let calibration = LedCalibration { matrix: MINI2_RED };
+        let (_, green, _) = calibration.apply(80, 80, 80);
+        assert_eq!(green, 80);
+    }
+
+    #[test]
+    fn calibration_rejects_malformed_matrices() {
+        for raw in [
+            r#"{"type":"matrix","matrix":[[1,2,3]]}"#,
+            r#"{"type":"gain","matrix":[[1,0,0],[0,1,0],[0,0,1]]}"#,
+            r#"{"type":"matrix","matrix":[[1,0,0],[0,1e9,0],[0,0,1]]}"#,
+        ] {
+            assert!(LedCalibration::parse(raw).is_err(), "{raw}");
+        }
+    }
+
+    #[test]
+    fn identity_calibration_is_a_no_op() {
+        let calibration = LedCalibration::parse(
+            r#"{"type":"matrix","matrix":[[1,0,0],[0,1,0],[0,0,1]]}"#,
+        )
+        .unwrap();
+        assert_eq!(calibration.apply(12, 200, 77), (12, 200, 77));
+    }
 }
