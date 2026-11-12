@@ -1,3 +1,6 @@
+#[path = "../common/segment_clock.rs"]
+mod segment_clock;
+
 #[path = "hardware.rs"]
 mod hardware;
 
@@ -26,7 +29,7 @@ pub fn spec() -> StationSpec {
         led_calibration: None,
         create_led_backend: hardware::create_led_backend,
         create_microphone_backend: || None,
-        create_clock_backend: || None,
+        create_clock_backend: || segment_clock::create_clock_backend(segment_clock::Layout::Midi),
         capabilities: CAPABILITIES,
         input_actions: &[],
         input_gestures: &[],

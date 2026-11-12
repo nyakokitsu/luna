@@ -1091,6 +1091,7 @@ version = "0.2.7"
 dependencies = [
  "anyhow",
  "luna",
+ "serde_json",
 ]
 
 [[package]]
@@ -1118,6 +1119,7 @@ version = "0.2.7"
 dependencies = [
  "anyhow",
  "luna",
+ "serde_json",
 ]
 
 [[package]]
@@ -1126,6 +1128,7 @@ version = "0.2.7"
 dependencies = [
  "anyhow",
  "luna",
+ "serde_json",
 ]
 
 [[package]]

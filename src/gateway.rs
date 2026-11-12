@@ -118,9 +118,49 @@ pub enum ClockCommand {
     Off,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClockMusicMode {
+    #[default]
+    Alternating,
+    Wave,
+    Clock,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ClockMusicPolicy {
+    pub mode: ClockMusicMode,
+    pub wave_seconds: u32,
+    pub time_seconds: u32,
+}
+
+impl Default for ClockMusicPolicy {
+    fn default() -> Self {
+        Self { mode: ClockMusicMode::Alternating, wave_seconds: 15, time_seconds: 5 }
+    }
+}
+
+impl ClockMusicPolicy {
+    pub fn validate(&self) -> Result<()> {
+        if !(1..=3600).contains(&self.wave_seconds) || !(1..=3600).contains(&self.time_seconds) {
+            bail!("clock music intervals must be 1..3600 seconds");
+        }
+        Ok(())
+    }
+}
+
 pub trait ClockBackend: Send + Sync {
     fn segments(&self) -> Vec<String>;
     fn apply(&self, command: ClockCommand) -> Result<()>;
+    fn music_policy_available(&self) -> bool { false }
+    fn configure_native_control(&self, _data_dir: &Path) -> Result<()> { Ok(()) }
+    fn native_control_available(&self) -> bool { false }
+    fn poll_clock(&self, _now: Instant) -> Result<()> { Ok(()) }
+    fn text_available(&self) -> bool { false }
+    fn apply_music(&self, command: ClockCommand, _policy: ClockMusicPolicy) -> Result<()> {
+        self.apply(command)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -586,6 +626,8 @@ struct ClockInfo {
 }
 #[derive(Debug, Deserialize)]
 struct ClockRequest {
+    #[serde(default)]
+    music: Option<ClockMusicPolicy>,
     #[serde(default)]
     time: Option<String>,
     #[serde(default)]
@@ -3899,8 +3941,7 @@ async fn run_plugin(app: App, id: String, event: String, cancelled: Arc<AtomicBo
                         frame.insert(segment, value);
                     }
                     if let Some(clock) = &station_clock {
-                        clock
-                            .apply(ClockCommand::Segments(frame))
+                        station_clock_write(|| clock.apply(ClockCommand::Segments(frame)))
                             .map_err(mlua::Error::external)?;
                         return Ok(());
                     }
@@ -3913,11 +3954,10 @@ async fn run_plugin(app: App, id: String, event: String, cancelled: Arc<AtomicBo
                 "time",
                 lua.create_function(move |_, (time, brightness): (String, Option<u8>)| {
                     if let Some(clock) = &station_clock {
-                        return clock
-                            .apply(ClockCommand::Time {
-                                text: time,
-                                brightness: brightness.unwrap_or(170),
-                            })
+                        return station_clock_write(|| clock.apply(ClockCommand::Time {
+                            text: time,
+                            brightness: brightness.unwrap_or(170),
+                        }))
                             .map_err(mlua::Error::external);
                     }
                     clock_time(&time, brightness.unwrap_or(170)).map_err(mlua::Error::external)
@@ -3928,8 +3968,7 @@ async fn run_plugin(app: App, id: String, event: String, cancelled: Arc<AtomicBo
                 "off",
                 lua.create_function(move |_, ()| {
                     if let Some(clock) = &station_clock {
-                        return clock
-                            .apply(ClockCommand::Off)
+                        return station_clock_write(|| clock.apply(ClockCommand::Off))
                             .map_err(mlua::Error::external);
                     }
                     clock_release().map_err(mlua::Error::external)
@@ -5186,7 +5225,7 @@ async fn runtime_clock(
     Json(request): Json<ClockRequest>,
 ) -> Result<StatusCode, ApiError> {
     runtime_permission(&a, &id, &headers, "clock").await?;
-    put_clock_request(a.clock.as_ref(), request)
+    run_clock_request(move || put_clock_request(a.clock.as_ref(), request)).await
 }
 async fn runtime_clock_off(
     State(a): State<App>,
@@ -5194,7 +5233,7 @@ async fn runtime_clock_off(
     headers: HeaderMap,
 ) -> Result<StatusCode, ApiError> {
     runtime_permission(&a, &id, &headers, "clock").await?;
-    clock_off_request(a.clock.as_ref())
+    run_clock_request(move || clock_off_request(a.clock.as_ref())).await
 }
 async fn get_settings(State(a): State<App>) -> Json<Settings> {
     Json(a.settings.lock().await.clone())
@@ -5662,7 +5701,7 @@ static CLOCK_TEXT_GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
 static CLOCK_TEXT_EPOCH: AtomicU64 = AtomicU64::new(0);
 static CLOCK_TEXT_STOPPING: AtomicBool = AtomicBool::new(false);
 
-async fn show_clock_text(request: ClockTextRequest) -> Result<()> {
+async fn show_clock_text(request: ClockTextRequest, backend: Option<Arc<dyn ClockBackend>>) -> Result<()> {
     anyhow::ensure!(
         !CLOCK_TEXT_STOPPING.load(Ordering::SeqCst),
         "server is shutting down"
@@ -5701,7 +5740,12 @@ async fn show_clock_text(request: ClockTextRequest) -> Result<()> {
                             return Ok(());
                         }
                     }
-                    clock_write_frame(&frame.into_iter().collect())?;
+                    let frame = frame.into_iter().collect();
+                    if let Some(clock) = &backend {
+                        clock.apply(ClockCommand::Segments(frame))?;
+                    } else {
+                        clock_write_frame(&frame)?;
+                    }
                     previous = Some(clock_read(layout)?);
                 }
                 tokio::time::sleep_until(start + duration * (index as u32 + 1) / count).await;
@@ -5711,7 +5755,11 @@ async fn show_clock_text(request: ClockTextRequest) -> Result<()> {
         .await;
         let _gate = CLOCK_TEXT_GATE.lock().unwrap_or_else(|e| e.into_inner());
         if CLOCK_TEXT_EPOCH.load(Ordering::SeqCst) == epoch {
-            clock_release_frame()?;
+            if let Some(clock) = &backend {
+                clock.apply(ClockCommand::Off)?;
+            } else {
+                clock_release_frame()?;
+            }
         }
         result
     })
@@ -5723,15 +5771,15 @@ async fn post_clock_text(
     State(a): State<App>,
     Json(request): Json<ClockTextRequest>,
 ) -> Result<StatusCode, ApiError> {
-    if !clock_text_available(a.clock.is_some(), clock_layout()) {
+    if !clock_text_available(a.clock.as_ref().is_some_and(|clock| !clock.text_available()), clock_layout()) {
         return Err(ApiError(anyhow!("text display requires a supported digit layout")));
     }
-    show_clock_text(request).await?;
+    show_clock_text(request, a.clock).await?;
     Ok(StatusCode::OK)
 }
 
-fn clock_text_available(station_backend: bool, layout: Option<&ClockLayout>) -> bool {
-    !station_backend && matches!(layout, Some(ClockLayout::Cucumber(_)))
+fn clock_text_available(backend_blocks_text: bool, layout: Option<&ClockLayout>) -> bool {
+    !backend_blocks_text && matches!(layout, Some(ClockLayout::Cucumber(_)))
 }
 
 pub(crate) fn stop_clock_text() -> Result<()> {
@@ -5748,7 +5796,7 @@ async fn get_clock(State(a): State<App>) -> Json<ClockInfo> {
     if let Some(clock) = &a.clock {
         return Json(ClockInfo {
             available: true,
-            text_available: false,
+            text_available: clock.text_available(),
             segments: clock.segments(),
         });
     }
@@ -5762,18 +5810,38 @@ async fn post_clock(
     State(a): State<App>,
     Json(request): Json<ClockRequest>,
 ) -> Result<StatusCode, ApiError> {
-    put_clock_request(a.clock.as_ref(), request)
+    run_clock_request(move || put_clock_request(a.clock.as_ref(), request)).await
 }
 
 async fn clock_off(State(a): State<App>) -> Result<StatusCode, ApiError> {
-    clock_off_request(a.clock.as_ref())
+    run_clock_request(move || clock_off_request(a.clock.as_ref())).await
+}
+
+// Keep a timed-out frame from overtaking a later Off in the blocking pool.
+static CLOCK_REQUESTS: Mutex<()> = Mutex::const_new(());
+
+async fn run_clock_request(
+    operation: impl FnOnce() -> Result<StatusCode, ApiError> + Send + 'static,
+) -> Result<StatusCode, ApiError> {
+    let guard = CLOCK_REQUESTS.lock().await;
+    task::spawn_blocking(move || {
+        let _guard = guard;
+        operation()
+    }).await.context("clock request worker")?
+}
+
+fn station_clock_write(operation: impl FnOnce() -> Result<()>) -> Result<()> {
+    let _gate = CLOCK_TEXT_GATE.lock().unwrap_or_else(|e| e.into_inner());
+    operation()?;
+    CLOCK_TEXT_EPOCH.fetch_add(1, Ordering::SeqCst);
+    Ok(())
 }
 
 fn clock_off_request(
     station_clock: Option<&Arc<dyn ClockBackend>>,
 ) -> Result<StatusCode, ApiError> {
     if let Some(clock) = station_clock {
-        clock.apply(ClockCommand::Off)?;
+        station_clock_write(|| clock.apply(ClockCommand::Off))?;
     } else {
         clock_release()?;
     }
@@ -5784,6 +5852,12 @@ fn put_clock_request(
     station_clock: Option<&Arc<dyn ClockBackend>>,
     request: ClockRequest,
 ) -> Result<StatusCode, ApiError> {
+    if let Some(policy) = request.music {
+        policy.validate()?;
+        if request.time.is_some() {
+            return Err(ApiError(anyhow!("clock music requires segments, not time")));
+        }
+    }
     if request.off {
         return clock_off_request(station_clock);
     }
@@ -5798,7 +5872,13 @@ fn put_clock_request(
         } else {
             return Err(ApiError(anyhow!("pass time or segments")));
         };
-        clock.apply(command)?;
+        station_clock_write(|| {
+            if let Some(policy) = request.music {
+                clock.apply_music(command, policy)
+            } else {
+                clock.apply(command)
+            }
+        })?;
         return Ok(StatusCode::OK);
     }
     if let Some(time) = request.time {
@@ -6006,10 +6086,24 @@ pub async fn run_with_station(station: Option<StationSpec>) -> Result<()> {
     let microphone = station
         .map(|spec| (spec.create_microphone_backend)().map(Arc::from))
         .flatten();
-    let clock = station
+    let clock: Option<Arc<dyn ClockBackend>> = station
         .map(|spec| (spec.create_clock_backend)().map(Arc::from))
         .flatten();
     let mut device = detect_device(&args.data_dir, forced_model);
+    // Capabilities reflect the detected backend, not a configured model name.
+    device.features.retain(|feature| !matches!(feature.as_str(),
+        "display.clock.music.v1" | "display.clock.native_control.v1"));
+    if let Some(backend) = &clock {
+        if let Err(error) = backend.configure_native_control(&args.data_dir) {
+            tracing::warn!(%error, "native clock control unavailable; using cooperative display");
+        }
+        if backend.native_control_available() {
+            device.features.push("display.clock.native_control.v1".into());
+        }
+    }
+    if clock.as_ref().is_some_and(|backend| backend.music_policy_available()) {
+        device.features.push("display.clock.music.v1".into());
+    }
     if let Some(spec) = station {
         // An explicit --model wins over the crate name: YAM ids and Luna crate
         // names do not always agree (the Mini 3 is `bergamot` in YAM and
@@ -6268,14 +6362,46 @@ pub async fn run_with_station(station: Option<StationSpec>) -> Result<()> {
         .layer(TraceLayer::new_for_http());
     let l = TcpListener::bind(&args.listen).await?;
     tracing::info!("web UI: http://{}", args.listen);
-    axum::serve(l, router)
+    let clock_poll = app.clock.as_ref()
+        .filter(|clock| clock.music_policy_available())
+        .map(spawn_clock_poll);
+    let shutdown_app = app.clone();
+    let result = axum::serve(l, router)
         .with_graceful_shutdown(async move {
             shutdown_signal().await;
             if let Some(shutdown)=audio_shutdown {shutdown.stop().await;}
-            stop_all_packages(&app).await;
+            stop_all_packages(&shutdown_app).await;
         })
-        .await?;
+        .await;
+    if let Some(poll) = clock_poll {
+        poll.abort();
+    }
+    // The HTTP server has drained. No late clock frame can acquire display
+    // ownership after this final release.
+    if let Some(clock) = app.clock.filter(|clock| clock.music_policy_available() || clock.text_available()) {
+        if let Err(error) = run_clock_request(move || clock_off_request(Some(&clock))).await {
+            tracing::warn!(?error, "native clock restore pending at shutdown");
+        }
+    }
+    result?;
     Ok(())
+}
+
+fn spawn_clock_poll(clock: &Arc<dyn ClockBackend>) -> task::JoinHandle<()> {
+    let clock = Arc::downgrade(clock);
+    task::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            let Some(clock) = clock.upgrade() else { break };
+            let result = task::spawn_blocking(move || clock.poll_clock(Instant::now()))
+                .await
+                .context("clock maintenance worker")
+                .and_then(|result| result);
+            if let Err(error) = result {
+                tracing::warn!(%error, "clock maintenance failed");
+            }
+        }
+    })
 }
 
 /// Browser-origin guard. The LAN is trusted, so there is no authentication;
@@ -6586,13 +6712,66 @@ mod tests {
         );
     }
 
+    static CLOCK_REQUEST_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn clock_music_defaults_validation_and_backend_dispatch() {
+        let _guard = CLOCK_REQUEST_TESTS.lock().unwrap();
+        struct RecordingClock(std::sync::atomic::AtomicUsize);
+        impl ClockBackend for RecordingClock {
+            fn segments(&self) -> Vec<String> { Vec::new() }
+            fn apply(&self, _: ClockCommand) -> Result<()> { self.0.store(1, Ordering::SeqCst); Ok(()) }
+            fn apply_music(&self, _: ClockCommand, policy: ClockMusicPolicy) -> Result<()> {
+                assert_eq!(policy, ClockMusicPolicy::default());
+                self.0.store(2, Ordering::SeqCst); Ok(())
+            }
+        }
+        struct LegacyClock(std::sync::atomic::AtomicBool);
+        impl ClockBackend for LegacyClock {
+            fn segments(&self) -> Vec<String> { Vec::new() }
+            fn apply(&self, _: ClockCommand) -> Result<()> { self.0.store(true, Ordering::SeqCst); Ok(()) }
+        }
+        let legacy = LegacyClock(std::sync::atomic::AtomicBool::new(false));
+        assert!(!legacy.music_policy_available());
+        assert!(!legacy.native_control_available());
+        legacy.apply_music(ClockCommand::Segments(HashMap::new()), ClockMusicPolicy::default()).unwrap();
+        assert!(legacy.0.load(Ordering::SeqCst));
+        let backend = Arc::new(RecordingClock(std::sync::atomic::AtomicUsize::new(0)));
+        let clock: Arc<dyn ClockBackend> = backend.clone();
+        for (json, expected) in [
+            (r#"{"segments":{},"music":{}}"#, 2),
+            (r#"{"segments":{}}"#, 1),
+            (r#"{"off":true,"music":{}}"#, 1),
+        ] {
+            let request: ClockRequest = serde_json::from_str(json).unwrap();
+            put_clock_request(Some(&clock), request).unwrap();
+            assert_eq!(backend.0.load(Ordering::SeqCst), expected);
+        }
+        for json in [
+            r#"{"segments":{},"music":{"wave_seconds":0}}"#,
+            r#"{"segments":{},"music":{"time_seconds":3601}}"#,
+            r#"{"time":"12:34","music":{}}"#,
+            r#"{"off":true,"music":{"time_seconds":0}}"#,
+        ] {
+            backend.0.store(0, Ordering::SeqCst);
+            let request: ClockRequest = serde_json::from_str(json).unwrap();
+            assert!(put_clock_request(Some(&clock), request).is_err());
+            assert_eq!(backend.0.load(Ordering::SeqCst), 0);
+        }
+        for json in [r#"{"mode":"invalid"}"#, r#"{"wave_seconds":-1}"#] {
+            assert!(serde_json::from_str::<ClockMusicPolicy>(json).is_err());
+        }
+        assert_eq!(serde_json::from_str::<ClockMusicPolicy>("{}").unwrap(), ClockMusicPolicy::default());
+    }
+
     #[test]
     fn invalid_clock_request_does_not_cancel_overlay() {
+        let _guard = CLOCK_REQUEST_TESTS.lock().unwrap();
         let before = CLOCK_TEXT_EPOCH.load(Ordering::SeqCst);
         for request in [
-            ClockRequest { time: None, brightness: None, segments: None, off: false },
-            ClockRequest { time: Some("invalid".into()), brightness: None, segments: None, off: false },
-            ClockRequest { time: None, brightness: None, segments: Some(HashMap::from([("INVALID".into(), 100)])), off: false },
+            ClockRequest { music: None, time: None, brightness: None, segments: None, off: false },
+            ClockRequest { music: None, time: Some("invalid".into()), brightness: None, segments: None, off: false },
+            ClockRequest { music: None, time: None, brightness: None, segments: Some(HashMap::from([("INVALID".into(), 100)])), off: false },
         ] {
             assert!(put_clock_request(None, request).is_err());
             assert_eq!(CLOCK_TEXT_EPOCH.load(Ordering::SeqCst), before);

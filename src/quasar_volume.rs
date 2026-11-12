@@ -57,6 +57,16 @@ fn verified_build(build: &str, compatible: &[u8]) -> bool {
     {
         return true;
     }
+    // Clock-equipped Light 2: the state/VolumeSet protocol is selected by the
+    // exact board entry, as on Mini 3. Only one build has been hardware-tested;
+    // other non-empty builds still require the normal logical-state ACK.
+    if !build.is_empty()
+        && compatible
+            .split(|byte| *byte == 0)
+            .any(|entry| entry == b"yandex,plum-evt2")
+    {
+        return true;
+    }
     if build == "0.369.1.46.4793643989.20261020.299" {
         return compatible
             .split(|byte| *byte == 0)
@@ -351,6 +361,33 @@ pub fn set(percent: u8) -> Result<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lite2_clock_board_accepts_any_nonempty_firmware_with_exact_dt_entry() {
+        for build in [
+            "0.369.1.50.4794654278.20261021.133",
+            "0.369.1.50.4795647582.20261021.133",
+            "unknown",
+        ] {
+            assert!(verified_build(
+                build,
+                b"yandex,plum-evt2\0yandex,plum\0amlogic, axg\0"
+            ));
+        }
+        for build in [
+            "0.369.1.50.4794654278.20261021.133",
+            "0.369.1.50.4795647582.20261021.133",
+        ] {
+            for board in [
+                &b"prefix-yandex,plum-evt2\0"[..],
+                &b"yandex,plum-evt2-suffix\0"[..],
+                &b"yandex,plum\0"[..],
+            ] {
+                assert!(!verified_build(build, board));
+            }
+        }
+        assert!(!verified_build("", b"yandex,plum-evt2\0"));
+    }
 
     #[test]
     fn mini3_accepts_any_version_on_the_bergamot_board() {
