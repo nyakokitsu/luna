@@ -42,6 +42,7 @@ members = [
     "stations/yandexmidi",
     "stations/yandexplum",
     "stations/yandexstation_2",
+    "stations/yandexstation_max",
     "stations/pickle",
     "stations/yandexstation_3",
     "stations/mango",
