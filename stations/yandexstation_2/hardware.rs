@@ -89,6 +89,9 @@ impl Framebuffer {
 }
 
 impl LedBackend for Framebuffer {
+	fn calibration_preview_unavailable_reason(&self) -> Option<&'static str> {
+		Some("Native Station 2 RGBW ownership is not qualified; use the AirPlay framebuffer preview")
+	}
     fn show(&self, frame: &[u8]) -> Result<()> {
         if frame.len() != LED_COUNT * 3 {
             bail!("unexpected Station 2 LED frame length {}", frame.len());
