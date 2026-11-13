@@ -16,6 +16,7 @@ pub fn spec() -> StationSpec {
         led_topology: LedTopology { ring_count: 24, ..LedTopology::default() },
         // Owner-observed on Max: bytes in fb5 are interpreted as B, G, R.
         color_order: luna::ColorOrder::Bgr,
+		led_calibration: None,
         create_led_backend: hardware::create_led_backend,
         create_microphone_backend: || None,
         create_clock_backend: clock::create_clock_backend,

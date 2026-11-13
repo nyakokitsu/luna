@@ -6,6 +6,7 @@ pub(super) struct Preview {
     id: Option<String>,
     expires: Option<Instant>,
     colors: Vec<String>,
+    zone: Option<LedZone>,
     idle_until: Option<Instant>,
     volume_until: Option<Instant>,
     quiet_until: Option<Instant>,
@@ -33,6 +34,8 @@ pub(super) struct PreviewRequest {
     id: String,
     #[serde(default)]
     colors: Vec<String>,
+    #[serde(default)]
+    zone: String,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -101,13 +104,64 @@ async fn zone(led: &Led) -> (LedZone, usize) {
         (LedZone::Logo, led.topology.logo_count)
     }
 }
+
+fn select_zone(topology: LedTopology, requested: &str) -> Result<(LedZone, usize)> {
+    let request = if requested.is_empty() {
+        if topology.ring_count > 0 {
+            "ring"
+        } else {
+            "logo"
+        }
+    } else {
+        requested
+    };
+    match request {
+        "ring" if topology.ring_count > 0 => Ok((LedZone::Ring, topology.ring_count)),
+        "logo" if topology.has_logo && topology.logo_count > 0 => {
+            Ok((LedZone::Logo, topology.logo_count))
+        }
+        _ => bail!("requested LED zone is not available"),
+    }
+}
+
+fn zone_metadata(topology: LedTopology, reason: Option<&str>) -> Vec<serde_json::Value> {
+    let mut zones = Vec::new();
+    for (name, count) in [
+        ("ring", topology.ring_count),
+        (
+            "logo",
+            if topology.has_logo {
+                topology.logo_count
+            } else {
+                0
+            },
+        ),
+    ] {
+        if count > 0 {
+            zones.push(serde_json::json!({"id":name,"count":count,"supported":reason.is_none(),"reason":reason}));
+        }
+    }
+    zones
+}
+
+fn backend_reason(led: &Led) -> Option<&'static str> {
+    match &led.backend {
+        Some(backend) => backend.calibration_preview_unavailable_reason(),
+        None => Some("No qualified native LED backend"),
+    }
+}
+
 pub(super) async fn status(State(app): State<App>) -> Json<serde_json::Value> {
     let (_, count) = zone(&app.led).await;
+    let reason = backend_reason(&app.led);
+    let zones = zone_metadata(app.led.topology, reason);
+    let model = app.device.lock().await.model.clone();
     let p = app.led.panel_preview.lock().await;
     Json(
-        serde_json::json!({"led_count":if app.led.backend.is_some(){count}else{0},
+        serde_json::json!({"led_count":if reason.is_none(){count}else{0},"model":model,"zones":zones,"unavailable_reason":reason,
+        "defaults":{"spectrum_gain_r":1,"spectrum_gain_g":1,"spectrum_gain_b":1,"spectrum_saturation":1,"spectrum_black_floor":0,"led_level":200,"timing_mode":"fast_audio"},
         "preview":{"active":p.active(),"allowed":p.safe(),"suppressed":if p.safe(){""}else{"Alice/volume or native state unavailable"},"last_error":p.error},
-        "scope":"All Luna LED clients (not native maind)","settings_apply":"live"}),
+        "scope":"All Luna LED clients (not native maind)","settings_apply":"live","calibration_by_backend":true}),
     )
 }
 
@@ -141,11 +195,11 @@ pub(super) async fn preview(State(app): State<App>, request: Request<Body>) -> R
             }
         }
     }
-    let (_, count) = zone(&app.led).await;
-    if app.led.backend.is_none() || count == 0 {
+    let chosen = select_zone(app.led.topology, &input.zone);
+    if !stopping && (backend_reason(&app.led).is_some() || chosen.is_err()) {
         return (
             StatusCode::NOT_IMPLEMENTED,
-            "native Luna LED backend unavailable; use AirPlay scope for Station 2",
+            backend_reason(&app.led).unwrap_or("Requested native LED zone is unavailable"),
         )
             .into_response();
     }
@@ -159,6 +213,17 @@ pub(super) async fn preview(State(app): State<App>, request: Request<Body>) -> R
         }
         p.expires = Some(Instant::now());
         return Json(serde_json::json!({"stopped":true})).into_response();
+    }
+    let (selected_zone, count) = chosen.expect("validated zone");
+    if p.active()
+        && p.zone
+            .is_some_and(|zone| zone.name() != selected_zone.name())
+    {
+        return (
+            StatusCode::CONFLICT,
+            "stop preview before changing LED zone",
+        )
+            .into_response();
     }
     if input.colors.len() != count || input.colors.iter().any(|v| parse_color(v).is_err()) {
         return (
@@ -181,6 +246,7 @@ pub(super) async fn preview(State(app): State<App>, request: Request<Body>) -> R
     }
     p.id = Some(id.clone());
     p.colors = input.colors.clone();
+    p.zone = Some(selected_zone);
     p.expires = Some(Instant::now() + Duration::from_secs(4));
     drop(p);
     if fresh {
@@ -250,7 +316,11 @@ async fn run(led: Arc<Led>, id: String) {
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
     });
-    let (zone, count) = zone(&led).await;
+    let zone = led.panel_preview.lock().await.zone.unwrap_or(LedZone::Ring);
+    let count = match zone {
+        LedZone::Ring => led.topology.ring_count,
+        LedZone::Logo => led.topology.logo_count,
+    };
     let mut tick = tokio::time::interval(Duration::from_millis(100));
     loop {
         tick.tick().await;
@@ -284,8 +354,8 @@ async fn run(led: Arc<Led>, id: String) {
 }
 
 pub(super) async fn shutdown(led: &Led) {
-    let (zone, _) = zone(led).await;
     let mut p = led.panel_preview.lock().await;
+    let zone = p.zone.unwrap_or(LedZone::Ring);
     p.expires = Some(Instant::now());
     if p.drawn {
         let _ = release(led, zone).await;
@@ -296,6 +366,38 @@ pub(super) async fn shutdown(led: &Led) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn topology_is_not_restricted_to_bench_speakers() {
+        for count in [3, 4, 6, 16, 24, 36, 89] {
+            let topology = LedTopology {
+                ring_count: count,
+                has_logo: true,
+                logo_count: 6,
+            };
+            let zones = zone_metadata(topology, None);
+            assert_eq!(zones.len(), 2);
+            assert_eq!(zones[0]["count"], count);
+            assert_eq!(zones[1]["id"], "logo");
+            assert!(matches!(
+                select_zone(topology, "logo"),
+                Ok((LedZone::Logo, 6))
+            ));
+            assert!(select_zone(topology, "unknown").is_err());
+        }
+        let logo = LedTopology {
+            has_logo: true,
+            logo_count: 6,
+            ..LedTopology::default()
+        };
+        assert_eq!(zone_metadata(logo, None)[0]["id"], "logo");
+        assert!(matches!(select_zone(logo, ""), Ok((LedZone::Logo, 6))));
+        assert!(select_zone(logo, "ring").is_err());
+        assert!(zone_metadata(LedTopology::default(), None).is_empty());
+        assert_eq!(
+            zone_metadata(logo, Some("backend busy"))[0]["supported"],
+            false
+        );
+    }
     #[derive(Default)]
     struct Recording {
         frames: std::sync::Mutex<Vec<Vec<u8>>>,

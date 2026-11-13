@@ -88,6 +88,9 @@ enum RuntimeCommand {
 
 /// Hardware LED backend supplied by a station crate.
 pub trait LedBackend: Send + Sync {
+	// Some framebuffer implementations are not qualified for an independent
+	// calibration lease; advertise this rather than guessing byte order.
+	fn calibration_preview_unavailable_reason(&self) -> Option<&'static str> { None }
     fn show(&self, frame: &[u8]) -> Result<()>;
 
     fn restore_ring_trigger(&self) -> Result<()> {
