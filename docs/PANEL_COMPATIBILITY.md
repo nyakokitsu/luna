@@ -45,7 +45,11 @@ the AirPlay profile deliberately disables it (notably orion).
 ## Checks
 
 - `cargo test --workspace -- --test-threads=1`: all 11 station wrappers build;
-  the core plus station hardware/clock fixtures pass (332 passed, 1 ignored).
+  the integration branch's core plus station hardware/clock fixtures pass
+  (332 passed, 1 ignored). That branch also includes the separate volume PR
+  #37. The independent panel PR does not modify `src/quasar_volume.rs`; until
+  #37 merges, upstream 0.2.26's existing Lite 2 exact-entry test still fails.
+  This baseline failure must be reported separately, not counted as a pass.
   Max needed its missing `led_calibration: None` initializer restored.
 - AirPlay Go race/vet pass, including backend-derived reset defaults.
 - Browser fixtures: logo-only Mini; separate ring/logo Midi, pickle and mango;
