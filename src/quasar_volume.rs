@@ -78,7 +78,14 @@ fn verified_build(build: &str, compatible: &[u8]) -> bool {
         "0.369.1.50.4794649087.20261021.295" => has("yandex,station-midi"),
         "0.369.1.50.4794659041.20261021.299" => has("yandex,station-mini2"),
         "0.373.1.16.4829677713.20261104.303" => has("yandex,station-mini2"),
-        "0.369.1.50.4795647582.20261021.133" => has("yandex,plum-evt2"),
+        // Station 2 bench: the native VolumeSet ACK is the only path that
+        // updates the logical level used by the station buttons.
+        "0.373.1.16.4829676385.20261104.299" => has("yandex,station-midi"),
+        // Match the device-tree entry exactly: a look-alike suffix must not
+        // select the native backend.
+        "0.369.1.50.4795647582.20261021.133" => {
+            compatible.split(' ').any(|entry| entry == "yandex,plum-evt2")
+        }
         "0.369.1.50.4794654278.20261021.133" => has("yandex,prune-evt2"),
         "0.369.1.46.4778262955.20261013.160" => has("yandex,cucumber"),
         "0.369.1.46.4778262442.20261013.297" => has("yandex,yandexmicro"),
@@ -472,6 +479,17 @@ mod tests {
         ] {
             assert!(!verified_build(unqualified, b"yandex,station-mini2\0"));
         }
+    }
+
+    #[test]
+    fn station2_bench_build_is_verified_for_its_dt_entry() {
+        let build = "0.373.1.16.4829676385.20261104.299";
+        assert!(verified_build(build, b"yandex,station-midi\0amlogic, axg\0"));
+        assert!(!verified_build(build, b"yandex,station-mini2\0"));
+        assert!(!verified_build(
+            "0.373.1.16.4829676385.20261104.298",
+            b"yandex,station-midi\0"
+        ));
     }
 
     #[test]
