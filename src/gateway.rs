@@ -43,6 +43,10 @@ mod providers;
 mod bluetooth;
 #[path = "yam_binary.rs"]
 mod yam_binary;
+#[path = "yam_lua.rs"]
+mod yam_lua;
+#[path = "yam_payload.rs"]
+mod yam_payload;
 #[path = "dependencies.rs"]
 mod dependencies;
 #[path = "quasar_volume.rs"]
@@ -1393,7 +1397,9 @@ impl PluginManager {
         (path.is_dir() && validate_yam_id(id).is_ok()).then_some(PluginLocation {
             root: path,
             source: PluginSource::Yam,
-            package: Some(id.replace('.', "/")),
+            package: self.yam_root.as_ref()
+                .and_then(|yam| yam_payload::resolve(yam, &root.join(id), id).ok())
+                .map(|owned| owned.package),
         })
     }
     fn location(&self, id: &str) -> Result<PluginLocation> {
@@ -1464,7 +1470,7 @@ impl PluginManager {
                     }
                 }
             }
-            for location in locations {
+            for mut location in locations {
                 let p = location.root.join("plugin.toml");
                 let Ok(x) = fs::read_to_string(&p) else {
                     tracing::warn!(path=%p.display(), "ignoring plugin without plugin.toml");
@@ -1477,6 +1483,11 @@ impl PluginManager {
                 if location.source == PluginSource::Yam && manifest.id != location.root.file_name().unwrap_or_default().to_string_lossy() {
                     tracing::warn!(id=%manifest.id, path=%location.root.display(), "ignoring YAM plugin with mismatched id");
                     continue;
+                }
+                if location.source == PluginSource::Yam {
+                    location.package = self.yam_root.as_ref()
+                        .and_then(|yam| yam_payload::resolve(yam, &location.root, &manifest.id).ok())
+                        .map(|owned| owned.package);
                 }
                 let reason = compatibility_error(&manifest, device);
                 let reason = if location.source == PluginSource::Yam && manifest.launch.kind == LaunchKind::Binary {
@@ -1565,10 +1576,10 @@ impl PluginManager {
         let manifest_text = fs::read_to_string(stage.join("plugin.toml"))
             .context(".yap must contain root plugin.toml")?;
         let m: Manifest = toml::from_str(&manifest_text)?;
-        if m.id.contains('.') && self.yam_location(&m.id).is_some() {
+        if let Some(location) = self.yam_location(&m.id) {
             bail!(
                 "плагин установлен через YAM, удаляйте его через `yam remove {}`",
-                m.id.replace('.', "/")
+                location.package.context("cannot determine YAM plugin owner")?
             )
         }
         validate_id(&m.id)?;
@@ -3441,7 +3452,7 @@ fn harden_lua(lua: &Lua) -> mlua::Result<()> {
 async fn run_plugin(app: App, id: String, event: String, cancelled: Arc<AtomicBool>) -> Result<()> {
     let device = app.device.lock().await.clone();
     let led_count = app.led.settings.lock().await.count;
-    let (manifest, root, allowed) = {
+    let (location, yam_root, yam_run, allowed) = {
         let p = app.plugins.lock().await;
         if !p.enabled.contains(&id) {
             bail!("plugin is disabled")
@@ -3451,8 +3462,9 @@ async fn run_plugin(app: App, id: String, event: String, cancelled: Arc<AtomicBo
             bail!("plugin is incompatible: {reason}")
         };
         (
-            m,
-            location.root,
+            location,
+            p.yam_root.clone(),
+            p.yam_run.clone(),
             app.settings.lock().await.allow_plugin_binaries,
         )
     };
@@ -3469,6 +3481,16 @@ async fn run_plugin(app: App, id: String, event: String, cancelled: Arc<AtomicBo
     let plugin_id = id.clone();
     let web_registry = custom_web.clone();
     let lua_result = task::spawn_blocking(move || -> Result<()> {
+        // Keep the selected package immutable for the entire Lua service,
+        // including the lifetime of its registered custom page.
+        let prepared = yam_lua::prepare(
+            &plugin_id, location, yam_root.as_deref(), yam_run.as_deref(),
+        )?;
+        let manifest = prepared.manifest.clone();
+        let root = prepared.root.clone();
+        if let Some(reason) = compatibility_error(&manifest, &device) {
+            bail!("plugin is incompatible: {reason}")
+        }
         let lua = Lua::new_with(
             StdLib::TABLE | StdLib::STRING | StdLib::MATH | StdLib::UTF8,
             LuaOptions::default(),
@@ -3498,7 +3520,7 @@ async fn run_plugin(app: App, id: String, event: String, cancelled: Arc<AtomicBo
         if permissions.contains("web") {
             let register = lua.create_table()?;
             let web_id = plugin_id.clone();
-            let web_root = root.clone();
+            let web_root = root.to_path_buf();
             let web_registry = web_registry.clone();
             register.set(
                 "customweb",
@@ -7330,6 +7352,69 @@ mod lifecycle_tests {
         use std::os::fd::AsRawFd;
         let file = fs::File::open(run.join("yam.lock")).unwrap();
         unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) == 0 }
+    }
+
+    #[tokio::test]
+    async fn yam_lua_page_lifecycle_update_and_containment() {
+        use std::os::unix::fs::symlink;
+        let (app, _state, run) = yam_binary_fixture().await;
+        // A generic Lua page has no exec/admin requirement.
+        app.settings.lock().await.allow_plugin_binaries = false;
+        // The page is a component of the SAME package as example.worker.
+        let package = app.root.join("yam/pkgs/example/worker");
+        let shared = app.root.join("yam/share/luna/plugins/example.page");
+        fs::create_dir_all(&shared).unwrap();
+        for version in ["1.0.0", "1.0.1"] {
+            let root = package.join(version).join("share/luna/plugins/example.page");
+            fs::create_dir_all(&root).unwrap();
+            fs::write(root.join("plugin.toml"), format!(
+                "id='example.page'\nname='Page'\nversion='{version}'\nentry='main.lua'\npermissions=['web']\n[launch]\nmode='service'\n")).unwrap();
+            fs::write(root.join("main.lua"),
+                "register.customweb('index.html')\nwhile true do alice.sleep(10) end").unwrap();
+            fs::write(root.join("index.html"), format!("<h1>{version}</h1>")).unwrap();
+        }
+        app.plugins.lock().await.enabled.insert("example.page".into());
+        for version in ["1.0.0", "1.0.1"] {
+            let current = package.join("current");
+            if current.exists() { fs::remove_file(&current).unwrap(); }
+            symlink(version, &current).unwrap();
+            let root = package.join(version).join("share/luna/plugins/example.page");
+            for name in ["plugin.toml", "main.lua", "index.html"] {
+                let file = shared.join(name);
+                if file.exists() { fs::remove_file(&file).unwrap(); }
+                symlink(root.join(name), file).unwrap();
+            }
+            start_package(app.clone(), "example.page".into(), vec![]).await.unwrap();
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while !app.custom_web.lock().await.contains_key("example.page") {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            }).await.unwrap();
+            let Html(page) = custom_web(State(app.clone()), AxumPath("example.page".into()))
+                .await.unwrap();
+            assert_eq!(page, format!("<h1>{version}</h1>"));
+            let device = app.device.lock().await.clone();
+            let plugins = app.plugins.lock().await.list(&device).unwrap();
+            let page_info = plugins.iter().find(|p| p.manifest.id == "example.page").unwrap();
+            assert_eq!(page_info.package.as_deref(), Some("example/worker"));
+            assert!(!yam_exclusive_available(&run));
+            // The existing HTTP path containment check remains enforced.
+            fs::remove_file(root.join("index.html")).unwrap();
+            let foreign = app.root.join("foreign.html");
+            fs::write(&foreign, "private").unwrap();
+            symlink(foreign, root.join("index.html")).unwrap();
+            assert!(custom_web(State(app.clone()), AxumPath("example.page".into()))
+                .await.is_err());
+            stop_plugin(State(app.clone()), AxumPath("example.page".into())).await.unwrap();
+            assert!(yam_exclusive_available(&run));
+            assert!(!app.custom_web.lock().await.contains_key("example.page"));
+        }
+        // Package removal leaves no local .yap or copied HTML behind.
+        fs::remove_dir_all(&shared).unwrap();
+        fs::remove_dir_all(&package).unwrap();
+        assert!(custom_web(State(app.clone()), AxumPath("example.page".into())).await.is_err());
+        stop_plugin(State(app.clone()), AxumPath("test-service".into())).await.unwrap();
+        fs::remove_dir_all(&app.root).unwrap();
     }
 
     #[tokio::test]
