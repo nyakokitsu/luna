@@ -1,37 +1,63 @@
-# Package-owned Lua pages and multi-plugin packages
+# YAM package-owned plugin bundles and Lua pages
 
-Private proposed host change, based on official v0.2.26. Not deployed or published.
-No AirPlay-specific endpoint, calibration UI or hardware change is included.
+One YAM package may own several Luna plugins in its namespace.
+For example, `example/bundle` can ship:
 
-A YAM package can carry several Luna plugin directories in the same namespace.
-For example `example/bundle` can own `example.receiver`, `example.command`
-and `example.page`. Their permissions, enable/service state and process
-lifecycles remain independent; their files have one package owner/version.
+```
+share/luna/plugins/example.receiver/plugin.toml
+share/luna/plugins/example.command/plugin.toml
+share/luna/plugins/example.page/plugin.toml
+```
 
-The host resolves plugin.toml to the canonical immutable payload:
+They keep separate permissions, enable/service flags and process lifecycles,
+but their files have one package owner, selected version and update/removal
+transaction. This is a host capability, not a change to YAM's package format.
+There is no plugin-specific API, bundled web page or new network listener.
+
+## Verified ownership
+
+Luna resolves the descriptor to the canonical immutable payload:
 
 ```
 $YAM_ROOT/pkgs/<namespace>/<package>/<version>/share/luna/plugins/<plugin-id>/plugin.toml
 ```
 
-It verifies exact layout, matching plugin ID, matching namespace, a real plugin
-root and current selector belonging to that package/version. The displayed
-package/removal hint comes from this verified owner, not `plugin-id.replace`.
-Launchers/entries still must stay inside the plugin root.
+It verifies exact layout, matching plugin ID and namespace, a real plugin root,
+the selected package version and descriptor ownership. Launchers, entries and
+private libraries must still stay inside their plugin root. A descriptor from
+a different version or namespace is rejected.
 
-YAM Lua plugins now acquire a shared transaction lease and use the selected
-payload root, just like binary plugins. That makes register.customweb work
-without copying files into local Luna storage or weakening HTTP path containment.
-Stop Lua services as well as binaries before YAM transactions. A failed Lua
-start/stop releases the lease and removes its registered page.
+The API package field and removal hint use that verified owner; they no longer
+guess the package name by replacing the dot in each component's plugin ID.
+Existing one-plugin packages keep working without manifest changes.
 
-Local .yap plugins remain supported. No auto-grant of web/exec/admin permissions,
-no new listener and no package-manager implementation changes.
+## Lua lifetime and web pages
 
-Tests: binary bundle component ownership, shared-package Lua page serving,
-successive versions, page removal, transaction lock lifetime, foreign descriptor,
-escaped entry/current, cross-namespace rejection, and existing binary permission
-and runtime dependency tests. Full workspace validation is separately blocked
-in the upstream v0.2.26 Station Max crate (missing StationSpec.led_calibration);
-the existing Lite2 firmware assertion also fails in the broad library suite.
-Neither is fixed as part of this package-hosting change.
+YAM Lua plugins acquire a shared transaction lease and use the selected payload
+root for execution and register.customweb. The lease lasts for the service's
+whole lifetime. Pages therefore work through normal YAM file links without
+copying HTML into local plugin storage or weakening HTTP path containment.
+Stopping/failing Lua releases its lease and unregisters the page.
+
+Stop Lua services as well as binary plugins before YAM transactions. Do not
+delete yam.lock. Local .yap plugins remain supported. No web/exec/admin permission
+is automatically granted; existing enable and binary-execution checks remain.
+
+## Validation
+
+Tests cover a binary component owned by a differently named bundle, a Lua page
+in the same package as a binary component, actual HTML serving, successive
+versions, page cleanup, transaction exclusion, foreign descriptors,
+entry/current escapes, namespace rejection and existing runtime authorization.
+
+The matching host change was also exercised with a private companion bundle in
+full-system emulation: migration from a split companion, upgrade, corrupt input
+rejection, removal and reinstall. Four physical bench units were updated; three
+had manual cold-boot checks and one had normal reboot checks after installation.
+That validates the package-hosting path, not independent LED calibration or
+audio/colour quality.
+
+On the current upstream v0.2.26 baseline, the Lite2 firmware assertion fails
+unchanged; Station Max also lacks its StationSpec.led_calibration initializer.
+Report these separately when running broad/workspace tests. This change does
+not alter firmware validation or station hardware implementations.
