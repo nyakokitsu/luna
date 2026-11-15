@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Luna · LED calibration</title>
+<style>
+:root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;background:#10131c;color:#edf0f8;font:16px system-ui,sans-serif}main{max-width:760px;margin:auto;padding:24px 18px 64px}a{color:#bdaaff}h1{font-size:26px}h2{font-size:20px}section{background:#1a2030;border:1px solid #343e55;border-radius:16px;padding:20px;margin:18px 0}.row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}label{display:block;margin:14px 0}input,select,button{font:inherit}input[type=range]{width:100%;accent-color:#bdaaff}input[type=color]{width:64px;height:42px}input[type=text],select{max-width:100%;background:#10131c;color:inherit;border:1px solid #526079;border-radius:8px;padding:8px}button{padding:10px 14px;border:0;border-radius:8px;background:#bdaaff;color:#171027;cursor:pointer}button:disabled{opacity:.45;cursor:default}button.secondary{background:#303a52;color:inherit}.muted,small{color:#a4b0c9;line-height:1.5}#status{white-space:pre-wrap;overflow-wrap:anywhere;min-height:24px}canvas{display:block;max-width:100%;margin:12px auto}output{float:right}button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid #fff;outline-offset:2px}
+</style></head><body><main>
+<a href="/">← Luna</a><h1>LED calibration</h1>
+<p class="muted">RGB correction for Luna LED clients. This does not calibrate the native assistant or independently running hardware writers. Stock channel order and device calibration stay backend-owned.</p>
+<div id="status" role="status" aria-live="polite">Loading…</div>
+<section><h2>Preview</h2>
+<label>LED output <select id="zone" aria-label="LED output"></select></label>
+<div class="row"><input id="color" aria-label="Test colour" type="color" value="#604080"><input id="hex" aria-label="HEX colour" type="text" maxlength="7" value="#604080"></div>
+<label>Pattern <select id="pattern"><option value="solid">Solid colour</option><option value="rgb">RGB zones</option><option value="white">White</option><option value="grey">Grey</option><option value="off">Off</option></select></label>
+<canvas id="frame" width="360" height="220" aria-label="Requested LED frame"></canvas>
+<div class="row"><button id="start" disabled>Start preview</button><button id="stop" class="secondary" disabled>Release LEDs</button></div>
+<p class="muted">No automatic preview. A four-second renewable lease yields to assistant speech and volume changes. Missing native state prevents output. Closing or hiding the tab stops renewal; expiry restores the backend trigger without painting a blank frame over the assistant.</p>
+<small id="owner"></small></section>
+<section><h2>RGB gains</h2>
+<div id="gains"></div>
+<div class="row"><button id="save" disabled>Save gains</button><button id="reload" class="secondary">Reload saved</button><button id="reset" class="secondary">Reset form</button></div>
+<p class="muted">Saved gains apply live to every Luna LED zone, not per zone. They can compound with correction in a client plugin. Preview applies the form's gains once, before stock device calibration.</p></section>
+<section><h2>Gain presets</h2>
+<div class="row"><input id="name" aria-label="Preset name" type="text" maxlength="80" placeholder="Name"><button id="store" disabled>Store preset</button><select id="presets" aria-label="Presets"></select><button id="load-preset" class="secondary">Load into form</button><button id="delete-preset" class="secondary">Delete</button></div>
+<div class="row"><button id="export" class="secondary">Export JSON</button><label>Import JSON <input id="import" type="file" accept=".json,application/json"></label></div>
+<small>Loading, importing and resetting only change the form. Save explicitly to change the device. Presets contain RGB gains only.</small></section>
+</main><script>
+'use strict';
+const $=id=>document.getElementById(id),names=['gain_r','gain_g','gain_b'];
+let count=0,zones=[],presets={},lease='',running=false,busy=false,timer=null,poll=null,loaded=false;
+function message(text){$('status').textContent=text;}
+async function api(path,method='GET',body){
+ const response=await fetch('/api/led-panel/'+path,{method,cache:'no-store',headers:{'Content-Type':'application/json','X-Luna-Local':'1'},...(body===undefined?{}:{body:JSON.stringify(body)})});
+ if(!response.ok)throw Error((await response.text()).slice(0,240)||'HTTP '+response.status);
+ return response.json();
+}
+function checkedGains(value){
+ if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).some(key=>!names.includes(key)))throw Error('Expected RGB gains only');
+ for(const key of names)if(typeof value[key]!=='number'||!Number.isFinite(value[key])||value[key]<.05||value[key]>4)throw Error('Gains must be 0.05..4');
+ return Object.fromEntries(names.map(key=>[key,value[key]]));
+}
+function gains(){return checkedGains(Object.fromEntries(names.map(key=>[key,+$(key).value])));}
+function populate(value){const g=checkedGains(value);for(const key of names){$(key).value=g[key];$(key+'-value').textContent=g[key];}paint();}
+for(const [i,key] of names.entries()){
+ const label=document.createElement('label');label.textContent=['Red','Green','Blue'][i];
+ const output=document.createElement('output');output.id=key+'-value';output.textContent='1';label.append(output);
+ const range=document.createElement('input');range.id=key;range.type='range';range.min='.05';range.max='4';range.step='.05';range.value='1';
+ range.oninput=()=>{output.textContent=range.value;paint();};label.append(range);$('gains').append(label);
+}
+function rgb(hex){return [1,3,5].map(i=>parseInt(hex.slice(i,i+2),16));}
+function hex(values){return '#'+values.map(v=>Math.round(Math.max(0,Math.min(255,v))).toString(16).padStart(2,'0')).join('').toUpperCase();}
+function frame(){
+ const pattern=$('pattern').value,g=names.map(key=>+$(key).value),colour=$('color').value;
+ return Array.from({length:count},(_,i)=>{const base=pattern==='rgb'?['#ff0000','#00ff00','#0000ff'][i%3]:pattern==='white'?'#ffffff':pattern==='grey'?'#808080':pattern==='off'?'#000000':colour;return hex(rgb(base).map((v,j)=>v*g[j]));});
+}
+function paint(){const canvas=$('frame'),ctx=canvas.getContext('2d');ctx.clearRect(0,0,360,220);for(const [i,colour] of frame().entries()){const a=i*2*Math.PI/count-Math.PI/2;ctx.beginPath();ctx.arc(180+88*Math.cos(a),110+88*Math.sin(a),count>30?3:10,0,2*Math.PI);ctx.fillStyle=colour;ctx.fill();}}
+async function status(){
+ const s=await api('status');zones=s.zones||[];
+ const previous=$('zone').value;$('zone').replaceChildren();
+ for(const z of zones){const o=document.createElement('option');o.value=z.id;o.textContent=z.id+' · '+z.count+' LEDs'+(z.supported?'':' · unavailable');o.disabled=!z.supported;$('zone').append(o);}
+ const chosen=zones.find(z=>z.id===previous&&z.supported)||zones.find(z=>z.supported);
+ if(chosen)$('zone').value=chosen.id;count=chosen?chosen.count:0;
+ $('start').disabled=!loaded||running||!count;$('zone').disabled=running;
+ $('owner').textContent=s.unavailable_reason|| (s.preview.active?(s.preview.allowed?'Preview owns output':'Preview suspended: '+s.preview.suppressed):'Normal Luna output');
+ if(s.preview.last_error)$('owner').textContent+=' · '+s.preview.last_error;paint();
+}
+async function renew(){
+ if(!running||busy)return;busy=true;
+ try{const r=await api('preview','POST',{id:lease,zone:$('zone').value,colors:frame()});lease=r.id;}
+ catch(e){running=false;clearInterval(timer);message(e.message+'; any previous lease will expire automatically');}
+ finally{busy=false;$('start').disabled=running||!count;$('stop').disabled=!running;$('zone').disabled=running;}
+}
+async function stop(){
+ running=false;clearInterval(timer);if(busy){message('Command in progress; renewal stopped, lease will expire safely');return;}
+ try{if(lease)await api('preview','DELETE',{id:lease});lease='';await status();}
+ catch(e){message(e.message+'; lease will expire automatically');}
+ $('stop').disabled=true;$('start').disabled=!count;$('zone').disabled=false;
+}
+function renderPresets(){$('presets').replaceChildren();for(const name of Object.keys(presets)){const o=document.createElement('option');o.value=name;o.textContent=name;$('presets').append(o);}}
+async function load(){
+ try{populate(await api('settings'));presets=await api('presets');renderPresets();loaded=true;await status();$('save').disabled=false;$('store').disabled=false;message('Saved gains loaded. Preview is off.');}
+ catch(e){message(e.message);}
+}
+function action(fn){return async()=>{try{await fn();}catch(e){message(e.message);}};}
+$('start').onclick=action(async()=>{running=true;await renew();if(running){timer=setInterval(renew,1000);$('stop').disabled=false;}await status();});
+$('stop').onclick=stop;
+$('zone').onchange=()=>{count=(zones.find(z=>z.id===$('zone').value)||{}).count||0;paint();};
+$('color').oninput=()=>{$('hex').value=$('color').value;paint();};
+$('hex').onchange=()=>{if(!/^#[0-9a-f]{6}$/i.test($('hex').value)){message('HEX must be #RRGGBB');return;}$('color').value=$('hex').value;paint();};
+$('pattern').onchange=paint;
+$('save').onclick=action(async()=>{await api('settings','PUT',gains());message('RGB gains saved; applied live to Luna LED clients.');});
+$('reload').onclick=action(async()=>{await stop();await load();});
+$('reset').onclick=()=>{populate({gain_r:1,gain_g:1,gain_b:1});message('Form reset; not saved.');};
+$('store').onclick=action(async()=>{const name=$('name').value.trim();if(!name)throw Error('Enter a preset name');const next={...presets,[name]:gains()};await api('presets','PUT',next);presets=next;renderPresets();message('Preset saved.');});
+$('load-preset').onclick=action(async()=>{if(presets[$('presets').value]){populate(presets[$('presets').value]);message('Preset loaded into form; not applied.');}});
+$('delete-preset').onclick=action(async()=>{const next={...presets};delete next[$('presets').value];await api('presets','PUT',next);presets=next;renderPresets();});
+$('export').onclick=action(async()=>{const url=URL.createObjectURL(new Blob([JSON.stringify({schema:1,gains:gains()},null,2)],{type:'application/json'})),a=document.createElement('a');a.href=url;a.download='luna-led-gains.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);});
+$('import').onchange=action(async()=>{const file=$('import').files[0];if(!file)return;if(file.size>4096)throw Error('File exceeds 4 KiB');const value=JSON.parse(await file.text());if(value.schema!==1)throw Error('Unknown schema');populate(value.gains);message('Imported into form; not applied.');});
+document.addEventListener('visibilitychange',()=>{if(document.hidden&&running)stop();});
+window.addEventListener('pagehide',()=>{running=false;clearInterval(timer);});
+(async()=>{await load();poll=setInterval(()=>{if(!busy)status().catch(e=>message(e.message));},3000);})();
+</script></body></html>

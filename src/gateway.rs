@@ -59,6 +59,8 @@ mod native_player;
 mod alice_input;
 #[path = "manifest_cache.rs"]
 mod manifest_cache;
+#[path = "led_panel.rs"]
+mod led_panel;
 
 #[derive(Parser)]
 struct Args {
@@ -88,6 +90,11 @@ enum RuntimeCommand {
 
 /// Hardware LED backend supplied by a station crate.
 pub trait LedBackend: Send + Sync {
+    // Some framebuffer implementations are not qualified for an independent
+    // calibration lease; advertise this rather than guessing byte order.
+    fn calibration_preview_unavailable_reason(&self) -> Option<&'static str> {
+        None
+    }
     fn show(&self, frame: &[u8]) -> Result<()>;
 
     fn restore_ring_trigger(&self) -> Result<()> {
@@ -453,6 +460,8 @@ impl Default for WebSettings {
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct LedSettings {
+    #[serde(default = "led_panel::default_gain")]
+    calibration_gain: [f64; 3],
     profile: String,
     #[serde(default = "default_led_count")]
     count: usize,
@@ -468,6 +477,7 @@ impl Default for LedSettings {
             count: default_led_count(),
             sysfs_root: default_led_root(),
             path_template: None,
+            calibration_gain: led_panel::default_gain(),
         }
     }
 }
@@ -941,6 +951,7 @@ struct App {
 }
 #[derive(Clone)]
 struct Led {
+    panel_preview: Arc<Mutex<led_panel::Preview>>,
     settings: Arc<Mutex<LedSettings>>,
     backend: Option<Arc<dyn LedBackend>>,
     color_order: ColorOrder,
@@ -1031,11 +1042,41 @@ impl Led {
     }
 
     async fn draw_zone(&self, colors: Vec<String>, count: usize, zone: LedZone) -> Result<()> {
+        let preview = self.panel_preview.lock().await;
+        if preview.active() {
+            return Ok(());
+        }
+        let result = self.draw_zone_unleased(colors, count, zone, true).await;
+        drop(preview);
+        result
+    }
+
+    async fn draw_zone_unleased(
+        &self,
+        colors: Vec<String>,
+        count: usize,
+        zone: LedZone,
+        apply_gain: bool,
+    ) -> Result<()> {
         let c = self.settings.lock().await.clone();
         if count == 0 {
             bail!("{} LED is not available", zone.name())
         }
         let colors = expand_colors(colors, count, zone.name())?;
+        let colors = if apply_gain {
+            colors.into_iter().map(|hex| {
+                let (r, g, b) = parse_color(&hex)?;
+                let scale = |value: u8, gain: f64| {
+                    (f64::from(value) * gain).round().clamp(0.0, 255.0) as u8
+                };
+                Ok(format!("#{:02X}{:02X}{:02X}",
+                    scale(r, c.calibration_gain[0]),
+                    scale(g, c.calibration_gain[1]),
+                    scale(b, c.calibration_gain[2])))
+            }).collect::<Result<Vec<_>>>()?
+        } else {
+            colors
+        };
         if let Some(backend) = &self.backend {
             let mut frame = Vec::with_capacity(colors.len() * 3);
             for hex in colors {
@@ -1091,6 +1132,10 @@ impl Led {
     }
 
     async fn off_zone(&self, zone: LedZone) -> Result<()> {
+        let preview = self.panel_preview.lock().await;
+        if preview.active() {
+            return Ok(());
+        }
         let count = match zone {
             LedZone::Ring => self.ring_count().await,
             LedZone::Logo => self.topology.logo_count,
@@ -5932,6 +5977,9 @@ async fn put_settings(
     if s.led.count == 0 || s.led.count > 128 {
         return Err(ApiError(anyhow!("LED count must be 1..128")));
     };
+    if !led_panel::valid_gain(s.led.calibration_gain) {
+        return Err(ApiError(anyhow!("LED calibration gains must be 0.05..4")));
+    }
     if s.web.ui && !s.web.api {
         return Err(ApiError(anyhow!("web.ui requires web.api")));
     }
@@ -6093,6 +6141,7 @@ pub async fn run_with_station(station: Option<StationSpec>) -> Result<()> {
         }
     }
     let led = Arc::new(Led {
+        panel_preview: Arc::new(Mutex::new(led_panel::Preview::default())),
         settings: Arc::new(Mutex::new(settings.led.clone())),
         backend: station
             .map(|spec| (spec.create_led_backend)().map(Arc::from))
@@ -6283,11 +6332,16 @@ pub async fn run_with_station(station: Option<StationSpec>) -> Result<()> {
     if web.ui {
         router = router
             .route("/", get(index))
+            .route("/calibration", get(led_panel::page))
             .route("/web/:id", get(custom_web));
     }
     if web.api {
         router = router
             .route("/api/plugins", get(list).post(install))
+            .route("/api/led-panel/status", get(led_panel::status))
+            .route("/api/led-panel/settings", get(led_panel::settings).put(led_panel::settings))
+            .route("/api/led-panel/preview", post(led_panel::preview).delete(led_panel::preview))
+            .route("/api/led-panel/presets", get(led_panel::presets).put(led_panel::presets))
             .route("/api/plugins/sources", get(plugin_sources))
             .route("/api/custom-web", get(list_custom_web))
             .route("/api/plugins/rescan", post(rescan_plugins))
@@ -6391,6 +6445,7 @@ pub async fn run_with_station(station: Option<StationSpec>) -> Result<()> {
     let result = axum::serve(l, router)
         .with_graceful_shutdown(async move {
             shutdown_signal().await;
+            led_panel::shutdown(&shutdown_app.led).await;
             if let Some(shutdown)=audio_shutdown {shutdown.stop().await;}
             stop_all_packages(&shutdown_app).await;
         })
@@ -7224,7 +7279,7 @@ mod lifecycle_tests {
         let app = App {
             root, settings: Arc::new(Mutex::new(settings)),
             device: Arc::new(Mutex::new(DeviceProfile { model: "test".into(), architecture: "x86_64".into(), features: vec![], source: "test".into(), led: LedTopology::default() })),
-            led: Arc::new(Led { settings: Arc::new(Mutex::new(LedSettings::default())), backend: None, color_order: ColorOrder::Rgb, calibration: None, topology: LedTopology::default() }),
+            led: Arc::new(Led { panel_preview: Arc::new(Mutex::new(led_panel::Preview::default())), settings: Arc::new(Mutex::new(LedSettings::default())), backend: None, color_order: ColorOrder::Rgb, calibration: None, topology: LedTopology::default() }),
             microphone: None, clock: None, plugins: Arc::new(Mutex::new(manager)),
             runtime_tokens: Arc::new(Mutex::new(HashMap::new())), speech_readers: Arc::new(Mutex::new(HashMap::new())), alice_readers: Arc::new(Mutex::new(HashMap::new())), speech_claims: Arc::new(Mutex::new(HashMap::new())),
             providers: Arc::new(Mutex::new(providers::Broker::default())),
