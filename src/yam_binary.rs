@@ -34,23 +34,7 @@ impl Lease {
 /// Caller holds the YAM shared lock. Resolve through the package's current
 /// selector, not a freely mutable common-tree executable link.
 pub(super) fn pinned_root(yam: &Path, shared: &Path, manifest: &Manifest) -> Result<PathBuf> {
-    validate_yam_id(&manifest.id)?;
-    let (namespace, name) = manifest
-        .id
-        .split_once('.')
-        .context("invalid YAM plugin id")?;
-    let yam = fs::canonicalize(yam)?;
-    let package = yam.join("pkgs").join(namespace).join(name);
-    let selected = fs::canonicalize(package.join("current"))
-        .context("YAM binary plugin has no selected package version")?;
-    if selected.parent() != Some(package.as_path()) || !selected.is_dir() {
-        bail!("YAM current selector escapes its package version directory")
-    }
-    let root = selected.join("share/luna/plugins").join(&manifest.id);
-    let descriptor = fs::canonicalize(shared.join("plugin.toml"))?;
-    if descriptor != root.join("plugin.toml") {
-        bail!("YAM plugin descriptor does not belong to the selected package version")
-    }
+    let root = yam_payload::resolve(yam, shared, &manifest.id)?.root;
     validate_policy(manifest)?;
     safe_relative(&manifest.entry)?;
     safe_relative(manifest.launch.path(manifest))?;
@@ -150,6 +134,23 @@ pub(super) fn prepare(
 mod tests {
     use super::*;
     use std::os::{fd::AsRawFd, unix::fs::symlink};
+
+    #[test]
+    fn binary_component_can_belong_to_a_bundle_with_a_different_name() {
+        let mut f = Fixture::new();
+        let original = f.yam.join("pkgs/example/worker");
+        let bundle = f.yam.join("pkgs/example/bundle");
+        fs::rename(original, &bundle).unwrap();
+        f.root = bundle.join("1.0.0/share/luna/plugins/example.worker");
+        fs::remove_file(f.shared.join("plugin.toml")).unwrap();
+        symlink(f.root.join("plugin.toml"), f.shared.join("plugin.toml")).unwrap();
+        let prepared = f.prepare().unwrap();
+        assert_eq!(prepared.root, f.root);
+        assert_eq!(
+            yam_payload::resolve(&f.yam, &f.shared, "example.worker").unwrap().package,
+            "example/bundle",
+        );
+    }
 
     struct Fixture {
         base: PathBuf,
