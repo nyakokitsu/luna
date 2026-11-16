@@ -150,14 +150,22 @@ mod tests {
     fn already_read_text_uses_the_same_freshness_rules() {
         let f = Fixture::new();
         let cache = ManifestCache::default();
-        assert_eq!(cache.parse(&f.path, f.text.clone()).unwrap().permissions, vec!["exec"]);
+        assert_eq!(
+            cache.parse(&f.path, f.text.clone()).unwrap().permissions,
+            vec!["exec"]
+        );
         // A caller that already read a different file content must not receive
         // the parsed result for the old content, even at the same path.
         let changed = f.text.replace("'exec'", "'none'");
         assert_eq!(changed.len(), f.text.len());
-        assert_eq!(cache.parse(&f.path, changed).unwrap().permissions, vec!["none"]);
+        assert_eq!(
+            cache.parse(&f.path, changed).unwrap().permissions,
+            vec!["none"]
+        );
         // Malformed text still fails after a successful parse.
-        assert!(cache.parse(&f.path, "not valid TOML = ]".to_owned()).is_err());
+        assert!(cache
+            .parse(&f.path, "not valid TOML = ]".to_owned())
+            .is_err());
     }
 
     #[test]

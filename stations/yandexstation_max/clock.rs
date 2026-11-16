@@ -8,43 +8,73 @@ const HEIGHT: usize = 16;
 const BYTES: usize = WIDTH * HEIGHT * 3;
 
 pub fn create_clock_backend() -> Option<Box<dyn ClockBackend>> {
-    let file = File::options().read(true).write(true).open("/dev/graphics/fb4").ok()?;
-    Some(Box::new(Matrix { state: Mutex::new((file, None)) }))
+    let file = File::options()
+        .read(true)
+        .write(true)
+        .open("/dev/graphics/fb4")
+        .ok()?;
+    Some(Box::new(Matrix {
+        state: Mutex::new((file, None)),
+    }))
 }
 
-struct Matrix { state: Mutex<(File, Option<Vec<u8>>)> }
+struct Matrix {
+    state: Mutex<(File, Option<Vec<u8>>)>,
+}
 
 fn render(text: &str, brightness: u8) -> Result<Vec<u8>> {
     let data = text.as_bytes();
-    if data.len() != 5 || data[2] != b':' || data.iter().enumerate().any(|(i, b)| i != 2 && !b.is_ascii_digit()) {
+    if data.len() != 5
+        || data[2] != b':'
+        || data
+            .iter()
+            .enumerate()
+            .any(|(i, b)| i != 2 && !b.is_ascii_digit())
+    {
         bail!("time must be HH:MM");
     }
     let hour = (data[0] - b'0') * 10 + data[1] - b'0';
     let minute = (data[3] - b'0') * 10 + data[4] - b'0';
-    if hour > 23 || minute > 59 { bail!("time out of range"); }
+    if hour > 23 || minute > 59 {
+        bail!("time out of range");
+    }
     let font: [[u8; 5]; 10] = [
-        [7,5,5,5,7], [2,6,2,2,7], [7,1,7,4,7], [7,1,7,1,7], [5,5,7,1,1],
-        [7,4,7,1,7], [7,4,7,5,7], [7,1,1,1,1], [7,5,7,5,7], [7,5,7,1,7],
+        [7, 5, 5, 5, 7],
+        [2, 6, 2, 2, 7],
+        [7, 1, 7, 4, 7],
+        [7, 1, 7, 1, 7],
+        [5, 5, 7, 1, 1],
+        [7, 4, 7, 1, 7],
+        [7, 4, 7, 5, 7],
+        [7, 1, 1, 1, 1],
+        [7, 5, 7, 5, 7],
+        [7, 5, 7, 1, 7],
     ];
     let mut pixels = vec![0; BYTES];
     let x_positions = [4, 8, 14, 18];
     for (index, digit) in [data[0], data[1], data[3], data[4]].iter().enumerate() {
         for (y, row) in font[(digit - b'0') as usize].iter().enumerate() {
             for x in 0..3 {
-                if row & (1 << (2-x)) != 0 {
+                if row & (1 << (2 - x)) != 0 {
                     let offset = ((y + 5) * WIDTH + x_positions[index] + x) * 3;
-                    pixels[offset..offset+3].fill(brightness);
+                    pixels[offset..offset + 3].fill(brightness);
                 }
             }
         }
     }
-    for y in [6, 8] { let offset = (y * WIDTH + 12) * 3; pixels[offset..offset+3].fill(brightness); }
+    for y in [6, 8] {
+        let offset = (y * WIDTH + 12) * 3;
+        pixels[offset..offset + 3].fill(brightness);
+    }
     Ok(pixels)
 }
 
 impl Matrix {
     fn write(&self, frame: &[u8]) -> Result<()> {
-        let mut state = self.state.lock().map_err(|_| anyhow::anyhow!("matrix lock poisoned"))?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("matrix lock poisoned"))?;
         let mut current = vec![0; BYTES];
         state.0.read_exact_at(&mut current, 0)?;
         if state.1.as_deref() != Some(current.as_slice()) && current.iter().any(|&b| b != 0) {
@@ -56,17 +86,24 @@ impl Matrix {
         Ok(())
     }
     fn release(&self) -> Result<()> {
-        let mut state = self.state.lock().map_err(|_| anyhow::anyhow!("matrix lock poisoned"))?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("matrix lock poisoned"))?;
         let mut current = vec![0; BYTES];
         state.0.read_exact_at(&mut current, 0)?;
-        if state.1.as_deref() == Some(current.as_slice()) { state.0.write_all_at(&[0; BYTES], 0)?; }
+        if state.1.as_deref() == Some(current.as_slice()) {
+            state.0.write_all_at(&[0; BYTES], 0)?;
+        }
         state.1 = None;
         Ok(())
     }
 }
 
 impl ClockBackend for Matrix {
-    fn segments(&self) -> Vec<String> { vec![] }
+    fn segments(&self) -> Vec<String> {
+        vec![]
+    }
     fn apply(&self, command: ClockCommand) -> Result<()> {
         match command {
             ClockCommand::Off => self.release(),
@@ -92,7 +129,9 @@ mod tests {
         let path = std::env::temp_dir().join(format!("luna-max-matrix-{}", std::process::id()));
         std::fs::write(&path, [0; BYTES]).unwrap();
         let file = File::options().read(true).write(true).open(&path).unwrap();
-        let matrix = Matrix { state: Mutex::new((file, None)) };
+        let matrix = Matrix {
+            state: Mutex::new((file, None)),
+        };
         matrix.write(&render("12:34", 50).unwrap()).unwrap();
         std::fs::write(&path, [2; BYTES]).unwrap();
         matrix.release().unwrap();

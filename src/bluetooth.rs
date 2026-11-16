@@ -3,11 +3,11 @@ use serde_json::{json, Value};
 use std::{
     fs,
     io::{BufRead, BufReader, Read, Write},
-    path::Path,
     os::fd::{FromRawFd, RawFd},
+    path::Path,
     process::{Child, ChildStdin, Command, Stdio},
-    sync::{Mutex, OnceLock},
     sync::mpsc::{self, Receiver},
+    sync::{Mutex, OnceLock},
     thread,
     time::Duration,
 };
@@ -70,7 +70,10 @@ fn native_quasar_command(command: &str) -> Result<()> {
     if cli.is_none() {
         let mut child = Command::new(QUASAR_MAIND)
             .arg("--cli")
-            .env("LD_LIBRARY_PATH", "/system/vendor/quasar/libs:/system/workdir/lib")
+            .env(
+                "LD_LIBRARY_PATH",
+                "/system/vendor/quasar/libs:/system/workdir/lib",
+            )
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -92,9 +95,8 @@ fn native_quasar_command(command: &str) -> Result<()> {
 }
 
 fn command_exists(name: &str) -> bool {
-    std::env::var_os("PATH").is_some_and(|paths| {
-        std::env::split_paths(&paths).any(|path| path.join(name).is_file())
-    })
+    std::env::var_os("PATH")
+        .is_some_and(|paths| std::env::split_paths(&paths).any(|path| path.join(name).is_file()))
 }
 
 fn prepare_bluetooth_audio() -> Result<()> {
@@ -126,7 +128,12 @@ fn command_output(args: &[&str]) -> Result<String> {
 fn process_running(name: &str) -> Result<bool> {
     for entry in fs::read_dir("/proc").context("read /proc for Bluetooth process status")? {
         let entry = entry?;
-        if !entry.file_name().to_string_lossy().chars().all(|c| c.is_ascii_digit()) {
+        if !entry
+            .file_name()
+            .to_string_lossy()
+            .chars()
+            .all(|c| c.is_ascii_digit())
+        {
             continue;
         }
         let cmdline = match fs::read(entry.path().join("cmdline")) {
@@ -156,7 +163,12 @@ fn rfkill_powered() -> Result<Option<bool>> {
     let mut states = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
-        if fs::read_to_string(path.join("type")).ok().as_deref().map(str::trim) != Some("bluetooth") {
+        if fs::read_to_string(path.join("type"))
+            .ok()
+            .as_deref()
+            .map(str::trim)
+            != Some("bluetooth")
+        {
             continue;
         }
         let state = fs::read_to_string(path.join("state"))?;
@@ -172,7 +184,8 @@ fn rfkill_powered() -> Result<Option<bool>> {
 fn parse_property(output: &str, property: &str) -> Option<bool> {
     output.lines().find_map(|line| {
         let (key, value) = line.split_once(':')?;
-        (key.trim().eq_ignore_ascii_case(property)).then(|| value.trim().eq_ignore_ascii_case("yes"))
+        (key.trim().eq_ignore_ascii_case(property))
+            .then(|| value.trim().eq_ignore_ascii_case("yes"))
     })
 }
 
@@ -222,14 +235,18 @@ fn config_flag(config: &str, tag: &str) -> Option<bool> {
 
 fn configured_pairable() -> Option<bool> {
     let config = fs::read_to_string(BSA_CONFIG).ok()?;
-    match (config_flag(&config, "visible"), config_flag(&config, "connectable")) {
+    match (
+        config_flag(&config, "visible"),
+        config_flag(&config, "connectable"),
+    ) {
         (Some(visible), Some(connectable)) => Some(visible && connectable),
         _ => None,
     }
 }
 
 fn set_bsa_visibility_config(on: bool) -> Result<()> {
-    let mut config = fs::read_to_string(BSA_CONFIG).context("read station Bluetooth configuration")?;
+    let mut config =
+        fs::read_to_string(BSA_CONFIG).context("read station Bluetooth configuration")?;
     for tag in ["visible", "connectable"] {
         let open = format!("<{tag}>");
         let close = format!("</{tag}>");
@@ -251,7 +268,9 @@ fn parse_demo_devices(output: &[u8]) -> Vec<Value> {
     let text = String::from_utf8_lossy(output);
     let mut latest = Vec::new();
     for line in text.lines() {
-        let Some(start) = line.find('{') else { continue };
+        let Some(start) = line.find('{') else {
+            continue;
+        };
         let Some(end) = line.rfind('}') else { continue };
         let Ok(message) = serde_json::from_str::<Value>(&line[start..=end]) else {
             continue;
@@ -292,14 +311,20 @@ fn demo_scan() -> Result<Vec<Value>> {
 
     let mut child = Command::new(BT_DEMO)
         .env("PATH", path)
-        .env("LD_LIBRARY_PATH", "/system/vendor/quasar/libs:/system/workdir/lib")
+        .env(
+            "LD_LIBRARY_PATH",
+            "/system/vendor/quasar/libs:/system/workdir/lib",
+        )
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
         .context("start station Bluetooth discovery helper")?;
     let mut stdin = child.stdin.take().context("open Bluetooth helper stdin")?;
-    let stdout = child.stdout.take().context("open Bluetooth helper stdout")?;
+    let stdout = child
+        .stdout
+        .take()
+        .context("open Bluetooth helper stdout")?;
     let reader = thread::spawn(move || {
         let mut output = Vec::new();
         let _ = std::io::BufReader::new(stdout).read_to_end(&mut output);
@@ -326,7 +351,9 @@ fn demo_scan() -> Result<Vec<Value>> {
         let _ = child.kill();
     }
     let _ = child.wait();
-    let output = reader.join().map_err(|_| anyhow!("Bluetooth helper stopped unexpectedly"))?;
+    let output = reader
+        .join()
+        .map_err(|_| anyhow!("Bluetooth helper stopped unexpectedly"))?;
     let devices = parse_demo_devices(&output);
     if let Ok(mut cached) = SCAN_RESULTS.get_or_init(|| Mutex::new(Vec::new())).lock() {
         *cached = devices.clone();
@@ -360,12 +387,18 @@ fn start_demo_session() -> Result<DemoSession> {
         )
     };
     if result != 0 {
-        bail!("create Bluetooth helper pseudo-terminal: {}", std::io::Error::last_os_error())
+        bail!(
+            "create Bluetooth helper pseudo-terminal: {}",
+            std::io::Error::last_os_error()
+        )
     }
     let duplicate_slave = || -> Result<fs::File> {
         let fd = unsafe { libc::dup(slave) };
         if fd < 0 {
-            bail!("duplicate Bluetooth helper pseudo-terminal: {}", std::io::Error::last_os_error())
+            bail!(
+                "duplicate Bluetooth helper pseudo-terminal: {}",
+                std::io::Error::last_os_error()
+            )
         }
         Ok(unsafe { fs::File::from_raw_fd(fd) })
     };
@@ -373,7 +406,10 @@ fn start_demo_session() -> Result<DemoSession> {
     let reader = master_file.try_clone()?;
     let child = Command::new(BT_DEMO)
         .env("PATH", path)
-        .env("LD_LIBRARY_PATH", "/system/vendor/quasar/libs:/system/workdir/lib")
+        .env(
+            "LD_LIBRARY_PATH",
+            "/system/vendor/quasar/libs:/system/workdir/lib",
+        )
         .env("ALSA_CONFIG_PATH", ALSA_CONFIG)
         .stdin(Stdio::from(duplicate_slave()?))
         .stdout(Stdio::from(duplicate_slave()?))
@@ -399,7 +435,7 @@ fn wait_demo_text(session: &mut DemoSession, needle: &str, timeout: Duration) ->
     while std::time::Instant::now() < deadline {
         while let Ok(line) = session.events.try_recv() {
             if line.contains(needle) {
-                return Ok(())
+                return Ok(());
             }
         }
         if let Ok(Some(status)) = session.child.try_wait() {
@@ -434,7 +470,7 @@ fn wait_demo_result(session: &mut DemoSession, command: &str, timeout: Duration)
                         }
                         thread::sleep(Duration::from_millis(50));
                     }
-                    return Ok(())
+                    return Ok(());
                 }
                 bail!("station Bluetooth command failed: {line}")
             }
@@ -452,17 +488,24 @@ fn wait_demo_result(session: &mut DemoSession, command: &str, timeout: Duration)
 
 fn demo_connect(address: &str) -> Result<()> {
     let mut session = demo_session()?;
-    if session.as_mut().is_some_and(|value| value.child.try_wait().ok().flatten().is_some()) {
+    if session
+        .as_mut()
+        .is_some_and(|value| value.child.try_wait().ok().flatten().is_some())
+    {
         *session = None;
     }
     if session.is_none() {
         *session = Some(start_demo_session()?);
     }
-    let value = session.as_mut().expect("Bluetooth helper session initialized");
+    let value = session
+        .as_mut()
+        .expect("Bluetooth helper session initialized");
     value.stdin.write_all(b"2\n")?;
     value.stdin.flush()?;
     thread::sleep(Duration::from_millis(500));
-    value.stdin.write_all(format!("12\n{address}\n").as_bytes())?;
+    value
+        .stdin
+        .write_all(format!("12\n{address}\n").as_bytes())?;
     value.stdin.flush()?;
     let result = wait_demo_result(value, "bt_dispatch_command 11", Duration::from_secs(12));
     if result.is_err() {
@@ -474,14 +517,21 @@ fn demo_connect(address: &str) -> Result<()> {
 
 fn demo_disconnect(address: &str) -> Result<()> {
     let mut session = demo_session()?;
-    if session.as_mut().is_some_and(|value| value.child.try_wait().ok().flatten().is_some()) {
+    if session
+        .as_mut()
+        .is_some_and(|value| value.child.try_wait().ok().flatten().is_some())
+    {
         *session = None;
     }
     if session.is_none() {
         *session = Some(start_demo_session()?);
     }
-    let value = session.as_mut().expect("Bluetooth helper session initialized");
-    value.stdin.write_all(format!("11\n{}\n", cached_role(address)).as_bytes())?;
+    let value = session
+        .as_mut()
+        .expect("Bluetooth helper session initialized");
+    value
+        .stdin
+        .write_all(format!("11\n{}\n", cached_role(address)).as_bytes())?;
     value.stdin.flush()?;
     let result = wait_demo_result(value, "bt_dispatch_command 10", Duration::from_secs(4));
     drop(session);
@@ -493,16 +543,20 @@ fn demo_disconnect(address: &str) -> Result<()> {
 pub fn pairable(on: bool) -> Result<()> {
     if ctl_available() {
         command_output(&["pairable", if on { "on" } else { "off" }])?;
-        return Ok(())
+        return Ok(());
     }
     // On Quasar stations Bluetooth is owned by maind/mediad. Do not start
     // the standalone BSA demo: it creates a second A2DP path and bypasses the
     // native BluetoothCapability and BLUETOOTH_STREAM pipeline.
-    native_quasar_command(if on { "включи bluetooth" } else { "выключи bluetooth" })?;
+    native_quasar_command(if on {
+        "включи bluetooth"
+    } else {
+        "выключи bluetooth"
+    })?;
     if let Ok(mut cached) = PAIRABLE_STATE.get_or_init(|| Mutex::new(None)).lock() {
         *cached = Some(on);
     }
-    return Ok(())
+    return Ok(());
     /*
     if !Path::new(BT_DEMO).is_file() {
         bail!("Bluetooth pairing mode is unavailable: station helper is missing")
@@ -585,23 +639,27 @@ fn cached_role(address: &str) -> u8 {
                 .and_then(Value::as_str)
                 .is_some_and(|value| value.eq_ignore_ascii_case(address))
         })
-        .and_then(|device| device.get("role").and_then(Value::as_str).map(|role| {
-            if role.eq_ignore_ascii_case("Audio Source") {
-                1
-            } else {
-                0
-            }
-        }))
+        .and_then(|device| {
+            device.get("role").and_then(Value::as_str).map(|role| {
+                if role.eq_ignore_ascii_case("Audio Source") {
+                    1
+                } else {
+                    0
+                }
+            })
+        })
         .unwrap_or(0)
 }
 
 pub fn available() -> bool {
     command_exists("bluetoothctl")
-        || fs::read_dir(RFKILL_ROOT).is_ok_and(|entries| entries.flatten().any(|entry| {
-            fs::read_to_string(entry.path().join("type"))
-                .ok()
-                .is_some_and(|kind| kind.trim() == "bluetooth")
-        }))
+        || fs::read_dir(RFKILL_ROOT).is_ok_and(|entries| {
+            entries.flatten().any(|entry| {
+                fs::read_to_string(entry.path().join("type"))
+                    .ok()
+                    .is_some_and(|kind| kind.trim() == "bluetooth")
+            })
+        })
 }
 
 pub fn ctl_available() -> bool {
@@ -652,7 +710,9 @@ pub fn power(on: bool) -> Result<()> {
     if command_exists("bluetoothctl") {
         match command_output(&["power", state]) {
             Ok(_) => return Ok(()),
-            Err(error) => tracing::warn!(%error, "bluetoothctl power command failed; trying station fallback"),
+            Err(error) => {
+                tracing::warn!(%error, "bluetoothctl power command failed; trying station fallback")
+            }
         }
     }
     if Path::new(POWER_SCRIPT).is_file() {
@@ -661,7 +721,7 @@ pub fn power(on: bool) -> Result<()> {
             .status()
             .context("run Bluetooth power control script")?;
         if status.success() {
-            return Ok(())
+            return Ok(());
         }
     }
     bail!("Bluetooth power control failed: bluetoothctl and station fallback were unable to set power")
@@ -672,17 +732,19 @@ pub fn scan(on: bool) -> Result<()> {
         if ctl_available() {
             command_output(&["scan", "off"])?;
         }
-        return Ok(())
+        return Ok(());
     }
     if ctl_available() {
         command_output(&["scan", "on"])?;
-        return Ok(())
+        return Ok(());
     }
     if Path::new(BT_DEMO).is_file() {
         let _ = demo_scan()?;
-        return Ok(())
+        return Ok(());
     }
-    bail!("Bluetooth scan is unavailable: bluetoothctl and the station discovery helper are missing")
+    bail!(
+        "Bluetooth scan is unavailable: bluetoothctl and the station discovery helper are missing"
+    )
 }
 
 pub fn device_action(action: &str, address: &str) -> Result<()> {
@@ -701,7 +763,7 @@ pub fn device_action(action: &str, address: &str) -> Result<()> {
         bail!("unsupported Bluetooth action {action}")
     }
     if ctl_available() {
-        return command_output(&[action, address]).map(|_| ())
+        return command_output(&[action, address]).map(|_| ());
     }
     if !Path::new(BT_DEMO).is_file() {
         bail!("Bluetooth action is unavailable: bluetoothctl and the station helper are missing")

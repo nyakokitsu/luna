@@ -24,7 +24,9 @@ impl ClockIo for FakeClock {
     fn set_enabled(&self, enabled: bool) -> Result<(), DirectiveError> {
         let mut state = self.0.lock().unwrap();
         if !enabled && state.fail_before_send {
-            return Err(DirectiveError::Unsent(anyhow!("fixture connection refused")));
+            return Err(DirectiveError::Unsent(anyhow!(
+                "fixture connection refused"
+            )));
         }
         state.calls.push(enabled);
         if !enabled && state.fail_hide {

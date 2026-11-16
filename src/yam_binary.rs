@@ -147,7 +147,9 @@ mod tests {
         let prepared = f.prepare().unwrap();
         assert_eq!(prepared.root, f.root);
         assert_eq!(
-            yam_payload::resolve(&f.yam, &f.shared, "example.worker").unwrap().package,
+            yam_payload::resolve(&f.yam, &f.shared, "example.worker")
+                .unwrap()
+                .package,
             "example/bundle",
         );
     }

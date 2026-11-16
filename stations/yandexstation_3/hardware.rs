@@ -35,13 +35,16 @@ pub fn create_led_backend() -> Result<Box<dyn LedBackend>> {
 }
 
 fn open(path: &Path, size_path: &Path, depth_path: &Path) -> Result<Framebuffer> {
-    let geometry = fs::read_to_string(size_path)
-        .with_context(|| format!("read {}", size_path.display()))?;
+    let geometry =
+        fs::read_to_string(size_path).with_context(|| format!("read {}", size_path.display()))?;
     if geometry.trim() != "36,1" {
-        bail!("unexpected Station 3 framebuffer geometry {:?}", geometry.trim());
+        bail!(
+            "unexpected Station 3 framebuffer geometry {:?}",
+            geometry.trim()
+        );
     }
-    let depth = fs::read_to_string(depth_path)
-        .with_context(|| format!("read {}", depth_path.display()))?;
+    let depth =
+        fs::read_to_string(depth_path).with_context(|| format!("read {}", depth_path.display()))?;
     if depth.trim() != "24" {
         bail!("unexpected Station 3 framebuffer depth {:?}", depth.trim());
     }
@@ -92,10 +95,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn fixture(name: &str, geometry: &str, depth: &str) -> (PathBuf, PathBuf, PathBuf) {
-        let dir = std::env::temp_dir().join(format!(
-            "luna-station3-{name}-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("luna-station3-{name}-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let fb = dir.join("fb2");
         fs::write(&fb, vec![0u8; FRAME_BYTES]).unwrap();
