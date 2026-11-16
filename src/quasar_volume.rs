@@ -88,7 +88,15 @@ fn verified_build(build: &str, compatible: &[u8]) -> bool {
             .any(|entry| entry == "yandex,plum-evt2"),
         "0.369.1.50.4794654278.20261021.133" => has("yandex,prune-evt2"),
         "0.369.1.46.4778262955.20261013.160" => has("yandex,cucumber"),
-        "0.369.1.46.4778262442.20261013.297" => has("yandex,yandexmicro"),
+        // Station Lite: the board entry is `yandex,station-micro` (the same
+        // token install.sh uses for detection), not the model id. Match the
+        // entry exactly so a look-alike name cannot select the backend. On
+        // this build the native VolumeSet ACK was verified end to end:
+        // stereo_pair reported 20%, VolumeSet 60% was acknowledged and maind
+        // mirrored the new level to ALSA Master.
+        "0.369.1.46.4778262442.20261013.297" => {
+            compatible.split(' ').any(|entry| entry == "yandex,station-micro")
+        }
         "0.369.1.50.4794663100.20261021.160" => {
             has("yandex,cucumber-dvt2") || has("yandex,cucumber")
         }
@@ -496,6 +504,33 @@ mod tests {
     }
 
     #[test]
+    fn lite_requires_the_real_device_tree_entry_not_the_model_id() {
+        let build = "0.369.1.46.4778262442.20261013.297";
+        assert!(verified_build(
+            build,
+            b"yandex,station-micro\0amlogic, axg\0"
+        ));
+        assert!(verified_build(
+            build,
+            b"amlogic, axg\0yandex,station-micro\0"
+        ));
+        // The model id is not a device-tree entry: it must not qualify.
+        for compatible in [
+            &b"yandex,yandexmicro\0"[..],
+            &b"prefix-yandex,station-micro\0"[..],
+            &b"yandex,station-micro-suffix\0"[..],
+            &b""[..],
+        ] {
+            assert!(!verified_build(build, compatible));
+        }
+        assert!(!verified_build("", b"yandex,station-micro\0"));
+        assert!(!verified_build(
+            "0.369.1.46.4778262442.20261013.296",
+            b"yandex,station-micro\0"
+        ));
+    }
+
+    #[test]
     fn existing_native_firmware_qualification_is_preserved() {
         for (build, board) in [
             ("0.369.1.50.4794649087.20261021.295", "yandex,station-midi"),
@@ -503,7 +538,7 @@ mod tests {
             ("0.369.1.50.4795647582.20261021.133", "yandex,plum-evt2"),
             ("0.369.1.50.4794654278.20261021.133", "yandex,prune-evt2"),
             ("0.369.1.46.4778262955.20261013.160", "yandex,cucumber"),
-            ("0.369.1.46.4778262442.20261013.297", "yandex,yandexmicro"),
+            ("0.369.1.46.4778262442.20261013.297", "yandex,station-micro"),
             ("0.369.1.50.4794663100.20261021.160", "yandex,cucumber-dvt2"),
             ("0.369.1.50.4794663100.20261021.160", "yandex,cucumber"),
         ] {
