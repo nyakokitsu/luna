@@ -72,3 +72,50 @@ jobs:
           PY
             echo "ok $page"
           done
+
+  stations:
+    name: Station list
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.list.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: list
+        run: |
+          matrix=$(jq -c '[.devices[] | {device, target, binary, manifest_path}]' luna-manifest.json)
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  cross:
+    name: Cross build (${{ matrix.device }})
+    needs: stations
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.stations.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}-${{ matrix.device }}
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cross
+
+      # Same target, manifest and binary as tools/build-deploy.sh, taken from
+      # luna-manifest.json. Debug profile: this checks that the station
+      # compiles and links for its musl target; release builds stay local.
+      - name: cross build
+        run: >-
+          cross build --locked
+          --target ${{ matrix.target }}
+          --manifest-path ${{ matrix.manifest_path }}
+          --bin ${{ matrix.binary }}
