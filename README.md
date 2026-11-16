@@ -149,6 +149,11 @@ YAM и ручная установка могут существовать на 
 cargo test --workspace --locked
 ```
 
+То же самое при каждом push и pull request выполняет GitHub Actions
+(`.github/workflows/ci.yml`): тесты workspace, Python-тесты из `tests/`,
+проверка синтаксиса JavaScript в `web/` и кросс-сборка каждой станции из
+`luna-manifest.json` под её musl-target.
+
 Сборка и установка выбранной станции на подключённое устройство:
 
 ```sh
