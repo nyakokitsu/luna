@@ -35,32 +35,32 @@ use uuid::Uuid;
 
 use crate::rooms::Room;
 
-#[path = "media.rs"]
-mod media;
-#[path = "providers.rs"]
-mod providers;
+#[path = "alice_input.rs"]
+mod alice_input;
 #[path = "bluetooth.rs"]
 mod bluetooth;
+#[path = "dependencies.rs"]
+mod dependencies;
+#[path = "led_panel.rs"]
+mod led_panel;
+#[path = "manifest_cache.rs"]
+mod manifest_cache;
+#[path = "media.rs"]
+mod media;
+#[path = "native_player.rs"]
+mod native_player;
+#[path = "providers.rs"]
+mod providers;
+#[path = "quasar_volume.rs"]
+mod quasar_volume;
+#[path = "volume_io.rs"]
+mod volume_io;
 #[path = "yam_binary.rs"]
 mod yam_binary;
 #[path = "yam_lua.rs"]
 mod yam_lua;
 #[path = "yam_payload.rs"]
 mod yam_payload;
-#[path = "dependencies.rs"]
-mod dependencies;
-#[path = "quasar_volume.rs"]
-mod quasar_volume;
-#[path = "volume_io.rs"]
-mod volume_io;
-#[path = "native_player.rs"]
-mod native_player;
-#[path = "alice_input.rs"]
-mod alice_input;
-#[path = "manifest_cache.rs"]
-mod manifest_cache;
-#[path = "led_panel.rs"]
-mod led_panel;
 
 #[derive(Parser)]
 struct Args {
@@ -148,7 +148,11 @@ pub struct ClockMusicPolicy {
 
 impl Default for ClockMusicPolicy {
     fn default() -> Self {
-        Self { mode: ClockMusicMode::Alternating, wave_seconds: 15, time_seconds: 5 }
+        Self {
+            mode: ClockMusicMode::Alternating,
+            wave_seconds: 15,
+            time_seconds: 5,
+        }
     }
 }
 
@@ -164,11 +168,21 @@ impl ClockMusicPolicy {
 pub trait ClockBackend: Send + Sync {
     fn segments(&self) -> Vec<String>;
     fn apply(&self, command: ClockCommand) -> Result<()>;
-    fn music_policy_available(&self) -> bool { false }
-    fn configure_native_control(&self, _data_dir: &Path) -> Result<()> { Ok(()) }
-    fn native_control_available(&self) -> bool { false }
-    fn poll_clock(&self, _now: Instant) -> Result<()> { Ok(()) }
-    fn text_available(&self) -> bool { false }
+    fn music_policy_available(&self) -> bool {
+        false
+    }
+    fn configure_native_control(&self, _data_dir: &Path) -> Result<()> {
+        Ok(())
+    }
+    fn native_control_available(&self) -> bool {
+        false
+    }
+    fn poll_clock(&self, _now: Instant) -> Result<()> {
+        Ok(())
+    }
+    fn text_available(&self) -> bool {
+        false
+    }
     fn apply_music(&self, command: ClockCommand, _policy: ClockMusicPolicy) -> Result<()> {
         self.apply(command)
     }
@@ -755,9 +769,7 @@ fn alice_poll_response(
     }
 }
 
-async fn get_alice_command(
-    Query(query): Query<AliceCommandQuery>,
-) -> Result<Response, ApiError> {
+async fn get_alice_command(Query(query): Query<AliceCommandQuery>) -> Result<Response, ApiError> {
     let timeout_ms = query.timeout_ms.unwrap_or(60_000).min(60_000);
     let event = task::spawn_blocking(move || wait_alice_speech(timeout_ms, true))
         .await
@@ -772,9 +784,7 @@ async fn get_alice_command(
     )
 }
 
-async fn get_alice_speech(
-    Query(query): Query<AliceCommandQuery>,
-) -> Result<Response, ApiError> {
+async fn get_alice_speech(Query(query): Query<AliceCommandQuery>) -> Result<Response, ApiError> {
     let timeout_ms = query.timeout_ms.unwrap_or(60_000).min(60_000);
     let cancel = query.cancel;
     // Expose interim STT updates normally. In cancel mode the purpose is to
@@ -941,7 +951,8 @@ struct App {
     speech_readers:
         Arc<Mutex<HashMap<String, (String, Arc<std::sync::Mutex<media::SpeechReader>>)>>>,
     speech_claims: Arc<Mutex<HashMap<String, (String, String, String, Instant, bool)>>>,
-    alice_readers: Arc<Mutex<HashMap<String, (String, Arc<std::sync::Mutex<alice_input::AliceReader>>)>>>,
+    alice_readers:
+        Arc<Mutex<HashMap<String, (String, Arc<std::sync::Mutex<alice_input::AliceReader>>)>>>,
     providers: Arc<Mutex<providers::Broker>>,
     custom_web: Arc<Mutex<HashMap<String, CustomWebPage>>>,
     runtime_api_url: String,
@@ -1064,16 +1075,21 @@ impl Led {
         }
         let colors = expand_colors(colors, count, zone.name())?;
         let colors = if apply_gain {
-            colors.into_iter().map(|hex| {
-                let (r, g, b) = parse_color(&hex)?;
-                let scale = |value: u8, gain: f64| {
-                    (f64::from(value) * gain).round().clamp(0.0, 255.0) as u8
-                };
-                Ok(format!("#{:02X}{:02X}{:02X}",
-                    scale(r, c.calibration_gain[0]),
-                    scale(g, c.calibration_gain[1]),
-                    scale(b, c.calibration_gain[2])))
-            }).collect::<Result<Vec<_>>>()?
+            colors
+                .into_iter()
+                .map(|hex| {
+                    let (r, g, b) = parse_color(&hex)?;
+                    let scale = |value: u8, gain: f64| {
+                        (f64::from(value) * gain).round().clamp(0.0, 255.0) as u8
+                    };
+                    Ok(format!(
+                        "#{:02X}{:02X}{:02X}",
+                        scale(r, c.calibration_gain[0]),
+                        scale(g, c.calibration_gain[1]),
+                        scale(b, c.calibration_gain[2])
+                    ))
+                })
+                .collect::<Result<Vec<_>>>()?
         } else {
             colors
         };
@@ -1306,7 +1322,9 @@ impl RunningPackage {
         let mut finished = self.finished.clone();
         tokio::time::timeout(timeout, async {
             while !*finished.borrow_and_update() {
-                finished.changed().await
+                finished
+                    .changed()
+                    .await
                     .context("package task ended without cleanup confirmation")?;
             }
             Ok::<(), anyhow::Error>(())
@@ -1442,7 +1460,9 @@ impl PluginManager {
         (path.is_dir() && validate_yam_id(id).is_ok()).then_some(PluginLocation {
             root: path,
             source: PluginSource::Yam,
-            package: self.yam_root.as_ref()
+            package: self
+                .yam_root
+                .as_ref()
                 .and_then(|yam| yam_payload::resolve(yam, &root.join(id), id).ok())
                 .map(|owned| owned.package),
         })
@@ -1624,7 +1644,9 @@ impl PluginManager {
         if let Some(location) = self.yam_location(&m.id) {
             bail!(
                 "плагин установлен через YAM, удаляйте его через `yam remove {}`",
-                location.package.context("cannot determine YAM plugin owner")?
+                location
+                    .package
+                    .context("cannot determine YAM plugin owner")?
             )
         }
         validate_id(&m.id)?;
@@ -1840,7 +1862,14 @@ fn detect_device(root: &Path, forced: Option<String>) -> DeviceProfile {
         features.push("audio.volume.alsa".into())
     }
     if crate::audio::available() {
-        features.push(if crate::audio::playback_pcm().is_some() { "audio.play.aplay" } else { "audio.play.mediad" }.into())
+        features.push(
+            if crate::audio::playback_pcm().is_some() {
+                "audio.play.aplay"
+            } else {
+                "audio.play.mediad"
+            }
+            .into(),
+        )
     }
     if bluetooth::available() {
         features.extend(["bluetooth.bluez".into(), "bluetooth.status".into()]);
@@ -1854,9 +1883,7 @@ fn detect_device(root: &Path, forced: Option<String>) -> DeviceProfile {
             ]);
         }
         if bluetooth::ctl_available() {
-            features.extend([
-                "bluetooth.remove".into(),
-            ])
+            features.extend(["bluetooth.remove".into()])
         }
     }
     if bluetooth::power_available() {
@@ -2834,28 +2861,20 @@ fn decode_ipc_event(service: &str, message: &[u8]) -> Result<Option<serde_json::
                 if let Some(request) = nested_field(&state, 15)? {
                     if varint_field(&request, 2)?.unwrap_or(0) != 0 {
                         if let Some(transcript) = text_field(&request, 1)? {
-                            return Ok(Some(
-                                serde_json::json!({
-                                    "type": "speech",
-                                    "source": "command",
-                                    "phase": "recognition",
-                                    "request_id": "",
-                                    "transcript": transcript,
-                                    "final": true
-                                }),
-                            ));
+                            return Ok(Some(serde_json::json!({
+                                "type": "speech",
+                                "source": "command",
+                                "phase": "recognition",
+                                "request_id": "",
+                                "transcript": transcript,
+                                "final": true
+                            })));
                         }
                     }
                 }
             }
             let is_final = nested_field(&state, 15)?
-                .map(|request| {
-                    varint_field(&request, 2)
-                        .ok()
-                        .flatten()
-                        .unwrap_or(0)
-                        != 0
-                })
+                .map(|request| varint_field(&request, 2).ok().flatten().unwrap_or(0) != 0)
                 .unwrap_or(false);
             let phase = alice_state_phase(&state);
             let request_id = text_field(&state, 7)?.unwrap_or_default();
@@ -3002,7 +3021,9 @@ fn file_player_remoting(method: u64, path: Option<&Path>) -> Vec<u8> {
 
 pub(crate) fn play_audio_file(path: &Path) -> Result<()> {
     crate::audio::validate_file(path)?;
-    if let Some(pcm) = crate::audio::playback_pcm() { return crate::audio::play_alsa(path, &pcm); }
+    if let Some(pcm) = crate::audio::playback_pcm() {
+        return crate::audio::play_alsa(path, &pcm);
+    }
     // FilePlayerCapability is owned by aliced. aliced forwards the actual
     // decoded audio to mediad; mediad is not the capability endpoint.
     let endpoint = ipc_endpoint("aliced")?;
@@ -3245,10 +3266,7 @@ fn wait_alice_speech(timeout_ms: u64, final_only: bool) -> Result<Option<serde_j
 }
 
 /// Same as wait_alice_speech on a new connection that is closed afterwards.
-fn wait_alice_speech_fresh(
-    timeout_ms: u64,
-    final_only: bool,
-) -> Result<Option<serde_json::Value>> {
+fn wait_alice_speech_fresh(timeout_ms: u64, final_only: bool) -> Result<Option<serde_json::Value>> {
     let deadline = Instant::now() + Duration::from_millis(timeout_ms.max(1));
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
@@ -3529,7 +3547,10 @@ async fn run_plugin(app: App, id: String, event: String, cancelled: Arc<AtomicBo
         // Keep the selected package immutable for the entire Lua service,
         // including the lifetime of its registered custom page.
         let prepared = yam_lua::prepare(
-            &plugin_id, location, yam_root.as_deref(), yam_run.as_deref(),
+            &plugin_id,
+            location,
+            yam_root.as_deref(),
+            yam_run.as_deref(),
         )?;
         let manifest = prepared.manifest.clone();
         let root = prepared.root.clone();
@@ -3577,9 +3598,7 @@ async fn run_plugin(app: App, id: String, event: String, cancelled: Arc<AtomicBo
                     }
                     let metadata = fs::metadata(&file).map_err(mlua::Error::external)?;
                     if metadata.len() > 4 * 1024 * 1024 {
-                        return Err(mlua::Error::external(
-                            "custom web HTML file exceeds 4 MiB",
-                        ));
+                        return Err(mlua::Error::external("custom web HTML file exceeds 4 MiB"));
                     }
                     if !matches!(
                         file.extension().and_then(|extension| extension.to_str()),
@@ -3782,9 +3801,7 @@ async fn run_plugin(app: App, id: String, event: String, cancelled: Arc<AtomicBo
             )?;
             volume.set(
                 "get",
-                lua.create_function(|_, ()| {
-                    current_volume().map_err(mlua::Error::external)
-                })?,
+                lua.create_function(|_, ()| current_volume().map_err(mlua::Error::external))?,
             )?;
             api.set("volume", volume)?;
         }
@@ -4021,11 +4038,13 @@ async fn run_plugin(app: App, id: String, event: String, cancelled: Arc<AtomicBo
                 "time",
                 lua.create_function(move |_, (time, brightness): (String, Option<u8>)| {
                     if let Some(clock) = &station_clock {
-                        return station_clock_write(|| clock.apply(ClockCommand::Time {
-                            text: time,
-                            brightness: brightness.unwrap_or(170),
-                        }))
-                            .map_err(mlua::Error::external);
+                        return station_clock_write(|| {
+                            clock.apply(ClockCommand::Time {
+                                text: time,
+                                brightness: brightness.unwrap_or(170),
+                            })
+                        })
+                        .map_err(mlua::Error::external);
                     }
                     clock_time(&time, brightness.unwrap_or(170)).map_err(mlua::Error::external)
                 })?,
@@ -4408,17 +4427,37 @@ async fn run_binary(
         } else {
             None
         };
-        (location, local_manifest, plugins.state_root(&id), plugins.yam_root.clone(), plugins.yam_run.clone())
+        (
+            location,
+            local_manifest,
+            plugins.state_root(&id),
+            plugins.yam_root.clone(),
+            plugins.yam_run.clone(),
+        )
     };
     let requested_id = id.clone();
     let prepared = if let Some(manifest) = local_manifest {
-        yam_binary::Prepared { manifest, root: location.root, lease: None }
+        yam_binary::Prepared {
+            manifest,
+            root: location.root,
+            lease: None,
+        }
     } else {
         task::spawn_blocking(move || {
-            yam_binary::prepare(&requested_id, location, yam_root.as_deref(), yam_run.as_deref())
-        }).await??
+            yam_binary::prepare(
+                &requested_id,
+                location,
+                yam_root.as_deref(),
+                yam_run.as_deref(),
+            )
+        })
+        .await??
     };
-    let yam_binary::Prepared { manifest, root, lease } = prepared;
+    let yam_binary::Prepared {
+        manifest,
+        root,
+        lease,
+    } = prepared;
     if cancelled.load(Ordering::Relaxed) {
         return Ok(());
     }
@@ -4431,7 +4470,11 @@ async fn run_binary(
     if let Some(reason) = compatibility_error(&manifest, &device) {
         bail!("package is incompatible: {reason}")
     }
-    if !manifest.permissions.iter().any(|permission| permission == "exec") {
+    if !manifest
+        .permissions
+        .iter()
+        .any(|permission| permission == "exec")
+    {
         bail!("binary packages require the exec permission")
     }
     let token = Uuid::new_v4().to_string();
@@ -4455,7 +4498,10 @@ async fn run_binary(
             state_root.join("runtime.log"),
         )?));
         let (interpreter, program) = if _yam_lease.is_some() {
-            (manifest.launch.interpreter.as_ref().map(|_| "sh"), root.join(&executable))
+            (
+                manifest.launch.interpreter.as_ref().map(|_| "sh"),
+                root.join(&executable),
+            )
         } else {
             launch_program(&manifest, &root, &executable)
         };
@@ -4692,7 +4738,9 @@ async fn start_package_locked(app: App, id: String, invocation_args: Vec<String>
             }
         }
         let mut plugins = app.plugins.lock().await;
-        if plugins.running.get(&id)
+        if plugins
+            .running
+            .get(&id)
             .is_some_and(|current| Arc::ptr_eq(current, &running))
         {
             plugins.running.remove(&id);
@@ -4719,7 +4767,9 @@ async fn custom_web(
     let root = fs::canonicalize(&page.root)?;
     let file = fs::canonicalize(&page.file)?;
     if !file.starts_with(&root) {
-        return Err(ApiError(anyhow!("custom web path escapes plugin directory")));
+        return Err(ApiError(anyhow!(
+            "custom web path escapes plugin directory"
+        )));
     }
     Ok(Html(fs::read_to_string(file)?))
 }
@@ -5154,7 +5204,12 @@ async fn stop_plugin(
     let revoked = a.runtime_tokens.lock().await.get(&id).cloned();
     let uses_led = {
         let plugins = a.plugins.lock().await;
-        plugins.running.contains_key(&id) && plugins.manifest(&id)?.permissions.iter().any(|p| p == "led")
+        plugins.running.contains_key(&id)
+            && plugins
+                .manifest(&id)?
+                .permissions
+                .iter()
+                .any(|p| p == "led")
     };
     stop_running_package(&a, &id).await?;
     if let Some(token) = revoked {
@@ -5508,7 +5563,8 @@ async fn change_volume(
             let current = current_volume()? as i16;
             let next = (current + direction * i16::from(step)).clamp(0, 100) as u8;
             set_volume_backend(next, false)
-        }).await?,
+        })
+        .await?,
     }))
 }
 
@@ -5529,7 +5585,8 @@ async fn set_mute(muted: bool) -> Result<Json<VolumeResponse>, ApiError> {
         percent: volume_io::dispatch(move || {
             let percent = current_volume()?;
             set_volume_backend(percent, muted)
-        }).await?,
+        })
+        .await?,
     }))
 }
 
@@ -5768,7 +5825,10 @@ static CLOCK_TEXT_GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
 static CLOCK_TEXT_EPOCH: AtomicU64 = AtomicU64::new(0);
 static CLOCK_TEXT_STOPPING: AtomicBool = AtomicBool::new(false);
 
-async fn show_clock_text(request: ClockTextRequest, backend: Option<Arc<dyn ClockBackend>>) -> Result<()> {
+async fn show_clock_text(
+    request: ClockTextRequest,
+    backend: Option<Arc<dyn ClockBackend>>,
+) -> Result<()> {
     anyhow::ensure!(
         !CLOCK_TEXT_STOPPING.load(Ordering::SeqCst),
         "server is shutting down"
@@ -5838,8 +5898,15 @@ async fn post_clock_text(
     State(a): State<App>,
     Json(request): Json<ClockTextRequest>,
 ) -> Result<StatusCode, ApiError> {
-    if !clock_text_available(a.clock.as_ref().is_some_and(|clock| !clock.text_available()), clock_layout()) {
-        return Err(ApiError(anyhow!("text display requires a supported digit layout")));
+    if !clock_text_available(
+        a.clock
+            .as_ref()
+            .is_some_and(|clock| !clock.text_available()),
+        clock_layout(),
+    ) {
+        return Err(ApiError(anyhow!(
+            "text display requires a supported digit layout"
+        )));
     }
     show_clock_text(request, a.clock).await?;
     Ok(StatusCode::OK)
@@ -5894,7 +5961,9 @@ async fn run_clock_request(
     task::spawn_blocking(move || {
         let _guard = guard;
         operation()
-    }).await.context("clock request worker")?
+    })
+    .await
+    .context("clock request worker")?
 }
 
 fn station_clock_write(operation: impl FnOnce() -> Result<()>) -> Result<()> {
@@ -6162,17 +6231,26 @@ pub async fn run_with_station(station: Option<StationSpec>) -> Result<()> {
         .flatten();
     let mut device = detect_device(&args.data_dir, forced_model);
     // Capabilities reflect the detected backend, not a configured model name.
-    device.features.retain(|feature| !matches!(feature.as_str(),
-        "display.clock.music.v1" | "display.clock.native_control.v1"));
+    device.features.retain(|feature| {
+        !matches!(
+            feature.as_str(),
+            "display.clock.music.v1" | "display.clock.native_control.v1"
+        )
+    });
     if let Some(backend) = &clock {
         if let Err(error) = backend.configure_native_control(&args.data_dir) {
             tracing::warn!(%error, "native clock control unavailable; using cooperative display");
         }
         if backend.native_control_available() {
-            device.features.push("display.clock.native_control.v1".into());
+            device
+                .features
+                .push("display.clock.native_control.v1".into());
         }
     }
-    if clock.as_ref().is_some_and(|backend| backend.music_policy_available()) {
+    if clock
+        .as_ref()
+        .is_some_and(|backend| backend.music_policy_available())
+    {
         device.features.push("display.clock.music.v1".into());
     }
     if let Some(spec) = station {
@@ -6191,10 +6269,7 @@ pub async fn run_with_station(station: Option<StationSpec>) -> Result<()> {
             }
             // A station crate may list the clock unconditionally; only report
             // it when the backend actually detected a display.
-            if *capability == "display.clock.segment.v1"
-                && clock.is_none()
-                && !clock_available()
-            {
+            if *capability == "display.clock.segment.v1" && clock.is_none() && !clock_available() {
                 continue;
             }
             if !device.features.iter().any(|feature| feature == capability) {
@@ -6228,7 +6303,9 @@ pub async fn run_with_station(station: Option<StationSpec>) -> Result<()> {
     }
     if crate::owner::enabled() {
         device.features.push("owner.tools.v1".into());
-        if ipc_endpoint("aliced").is_ok() {device.features.push("owner.speech.phase.v1".into());}
+        if ipc_endpoint("aliced").is_ok() {
+            device.features.push("owner.speech.phase.v1".into());
+        }
     }
     tracing::info!(model=%device.model,features=?device.features,"detected device");
     let app = App {
@@ -6244,7 +6321,8 @@ pub async fn run_with_station(station: Option<StationSpec>) -> Result<()> {
             yam_run,
         )?)),
         runtime_tokens: Arc::new(Mutex::new(HashMap::new())),
-        speech_readers: Arc::new(Mutex::new(HashMap::new())), alice_readers: Arc::new(Mutex::new(HashMap::new())),
+        speech_readers: Arc::new(Mutex::new(HashMap::new())),
+        alice_readers: Arc::new(Mutex::new(HashMap::new())),
         speech_claims: Arc::new(Mutex::new(HashMap::new())),
         providers: Arc::new(Mutex::new(providers::Broker::default())),
         custom_web: Arc::new(Mutex::new(HashMap::new())),
@@ -6339,9 +6417,18 @@ pub async fn run_with_station(station: Option<StationSpec>) -> Result<()> {
         router = router
             .route("/api/plugins", get(list).post(install))
             .route("/api/led-panel/status", get(led_panel::status))
-            .route("/api/led-panel/settings", get(led_panel::settings).put(led_panel::settings))
-            .route("/api/led-panel/preview", post(led_panel::preview).delete(led_panel::preview))
-            .route("/api/led-panel/presets", get(led_panel::presets).put(led_panel::presets))
+            .route(
+                "/api/led-panel/settings",
+                get(led_panel::settings).put(led_panel::settings),
+            )
+            .route(
+                "/api/led-panel/preview",
+                post(led_panel::preview).delete(led_panel::preview),
+            )
+            .route(
+                "/api/led-panel/presets",
+                get(led_panel::presets).put(led_panel::presets),
+            )
             .route("/api/plugins/sources", get(plugin_sources))
             .route("/api/custom-web", get(list_custom_web))
             .route("/api/plugins/rescan", post(rescan_plugins))
@@ -6358,7 +6445,10 @@ pub async fn run_with_station(station: Option<StationSpec>) -> Result<()> {
             .route("/api/lua/run", post(run_lua_file))
             .route("/api/lua/:id/stop", post(stop_lua_file))
             .route("/api/runtime/:id/device", get(runtime_device))
-            .route("/api/runtime/:id/dependencies/:alias", get(dependencies::resolve))
+            .route(
+                "/api/runtime/:id/dependencies/:alias",
+                get(dependencies::resolve),
+            )
             .route("/api/media", get(providers::status))
             .route("/api/media/select", post(providers::select))
             .route("/api/media/command", post(providers::transport))
@@ -6367,8 +6457,14 @@ pub async fn run_with_station(station: Option<StationSpec>) -> Result<()> {
             .route("/api/runtime/:id/provider/result", post(providers::result))
             .route("/api/runtime/:id/media", get(media::capabilities))
             .route("/api/runtime/:id/input/alice/next", post(alice_input::next))
-            .route("/api/runtime/:id/native-player/pause", post(media::native_pause))
-            .route("/api/runtime/:id/native-player/release", post(media::native_release))
+            .route(
+                "/api/runtime/:id/native-player/pause",
+                post(media::native_pause),
+            )
+            .route(
+                "/api/runtime/:id/native-player/release",
+                post(media::native_release),
+            )
             .route("/api/runtime/:id/speech/next", post(media::speech))
             .route(
                 "/api/runtime/:id/command/cancel",
@@ -6425,11 +6521,13 @@ pub async fn run_with_station(station: Option<StationSpec>) -> Result<()> {
     let mut router = router.with_state(app.clone());
     let mut audio_shutdown = None;
     if web.api {
-        let (audio_router,shutdown)=crate::audio_jobs::router(app.root.clone())?;
+        let (audio_router, shutdown) = crate::audio_jobs::router(app.root.clone())?;
         router = router.merge(audio_router);
-        audio_shutdown=Some(shutdown);
+        audio_shutdown = Some(shutdown);
         if crate::owner::enabled() {
-            router=router.merge(crate::owner::router(app.root.clone())).merge(owner_phase_router());
+            router = router
+                .merge(crate::owner::router(app.root.clone()))
+                .merge(owner_phase_router());
         }
     }
     let router = router
@@ -6438,7 +6536,9 @@ pub async fn run_with_station(station: Option<StationSpec>) -> Result<()> {
         .layer(TraceLayer::new_for_http());
     let l = TcpListener::bind(&args.listen).await?;
     tracing::info!("web UI: http://{}", args.listen);
-    let clock_poll = app.clock.as_ref()
+    let clock_poll = app
+        .clock
+        .as_ref()
         .filter(|clock| clock.music_policy_available())
         .map(spawn_clock_poll);
     let shutdown_app = app.clone();
@@ -6446,7 +6546,9 @@ pub async fn run_with_station(station: Option<StationSpec>) -> Result<()> {
         .with_graceful_shutdown(async move {
             shutdown_signal().await;
             led_panel::shutdown(&shutdown_app.led).await;
-            if let Some(shutdown)=audio_shutdown {shutdown.stop().await;}
+            if let Some(shutdown) = audio_shutdown {
+                shutdown.stop().await;
+            }
             stop_all_packages(&shutdown_app).await;
         })
         .await;
@@ -6455,7 +6557,10 @@ pub async fn run_with_station(station: Option<StationSpec>) -> Result<()> {
     }
     // The HTTP server has drained. No late clock frame can acquire display
     // ownership after this final release.
-    if let Some(clock) = app.clock.filter(|clock| clock.music_policy_available() || clock.text_available()) {
+    if let Some(clock) = app
+        .clock
+        .filter(|clock| clock.music_policy_available() || clock.text_available())
+    {
         if let Err(error) = run_clock_request(move || clock_off_request(Some(&clock))).await {
             tracing::warn!(?error, "native clock restore pending at shutdown");
         }
@@ -6492,7 +6597,12 @@ async fn browser_guard(request: Request<Body>, next: Next) -> Response {
     let host = headers
         .get(header::HOST)
         .and_then(|value| value.to_str().ok())
-        .or_else(|| request.uri().authority().map(|authority| authority.as_str()));
+        .or_else(|| {
+            request
+                .uri()
+                .authority()
+                .map(|authority| authority.as_str())
+        });
     if host.is_some_and(|host| !host_header_allowed(host)) {
         return (StatusCode::FORBIDDEN, "Host is not a local address").into_response();
     }
@@ -6563,7 +6673,9 @@ fn local_name(host: &str) -> bool {
     !host.is_empty()
         && (host == "localhost"
             || host.ends_with(".localhost")
-            || host.strip_suffix(".local").is_some_and(|name| !name.is_empty()))
+            || host
+                .strip_suffix(".local")
+                .is_some_and(|name| !name.is_empty()))
 }
 
 /// `Origin` must name a loopback/private address or a LAN-only name. `.local`
@@ -6593,7 +6705,12 @@ fn private_ipv4(ip: std::net::Ipv4Addr) -> bool {
 
 /// Content types a browser may send cross-origin without a preflight.
 fn form_content_type(value: &str) -> bool {
-    let essence = value.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
+    let essence = value
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
     matches!(
         essence.as_str(),
         "application/x-www-form-urlencoded" | "multipart/form-data" | "text/plain"
@@ -6601,20 +6718,35 @@ fn form_content_type(value: &str) -> bool {
 }
 
 fn phase_metadata(event: serde_json::Value) -> serde_json::Value {
-    let phase=event.get("phase").and_then(|s|s.as_str()).unwrap_or("unknown");
+    let phase = event
+        .get("phase")
+        .and_then(|s| s.as_str())
+        .unwrap_or("unknown");
     serde_json::json!({"phase":phase,"initial_snapshot":event.get("initial_snapshot").and_then(|v|v.as_bool()).unwrap_or(true)})
 }
 
 fn owner_phase_router() -> Router {
-    async fn phase(State(reader):State<Arc<std::sync::Mutex<media::SpeechReader>>>) -> Result<Json<serde_json::Value>,ApiError> {
-        let value=task::spawn_blocking(move || -> Result<serde_json::Value> {
-            let mut reader=reader.lock().map_err(|_|anyhow!("speech reader unavailable"))?;
-            Ok(reader.next()?.map(phase_metadata).unwrap_or_else(||serde_json::json!({"phase":"unknown","initial_snapshot":true})))
-        }).await.context("phase reader task failed")??;
+    async fn phase(
+        State(reader): State<Arc<std::sync::Mutex<media::SpeechReader>>>,
+    ) -> Result<Json<serde_json::Value>, ApiError> {
+        let value = task::spawn_blocking(move || -> Result<serde_json::Value> {
+            let mut reader = reader
+                .lock()
+                .map_err(|_| anyhow!("speech reader unavailable"))?;
+            Ok(reader
+                .next()?
+                .map(phase_metadata)
+                .unwrap_or_else(|| serde_json::json!({"phase":"unknown","initial_snapshot":true})))
+        })
+        .await
+        .context("phase reader task failed")??;
         Ok(Json(value))
     }
-    Router::new().route("/api/owner/phase",get(phase))
-        .with_state(Arc::new(std::sync::Mutex::new(media::SpeechReader::default())))
+    Router::new()
+        .route("/api/owner/phase", get(phase))
+        .with_state(Arc::new(std::sync::Mutex::new(
+            media::SpeechReader::default(),
+        )))
 }
 
 async fn shutdown_signal() {
@@ -6647,7 +6779,10 @@ async fn stop_all_packages(app: &App) {
     }
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
     for package in running {
-        if let Err(error) = package.stop(deadline.saturating_duration_since(tokio::time::Instant::now())).await {
+        if let Err(error) = package
+            .stop(deadline.saturating_duration_since(tokio::time::Instant::now()))
+            .await
+        {
             tracing::warn!(%error, "package cleanup incomplete during shutdown");
         }
     }
@@ -6658,8 +6793,13 @@ const UI: &str = include_str!("../web/index.html");
 mod tests {
     #[test]
     fn owner_phase_does_not_expose_speech_or_request_identity() {
-        let value=super::phase_metadata(serde_json::json!({"phase":"speaking","initial_snapshot":false,"transcript":"private words","request_id":"private identity","account":"private"}));
-        assert_eq!(value,serde_json::json!({"phase":"speaking","initial_snapshot":false}));
+        let value = super::phase_metadata(
+            serde_json::json!({"phase":"speaking","initial_snapshot":false,"transcript":"private words","request_id":"private identity","account":"private"}),
+        );
+        assert_eq!(
+            value,
+            serde_json::json!({"phase":"speaking","initial_snapshot":false})
+        );
     }
     use super::*;
 
@@ -6700,21 +6840,43 @@ mod tests {
             .unwrap();
         assert_eq!(result, "ok");
         // The package entry itself is loaded as text only.
-        assert!(lua.load(&bytecode[..]).set_mode(ChunkMode::Text).exec().is_err());
+        assert!(lua
+            .load(&bytecode[..])
+            .set_mode(ChunkMode::Text)
+            .exec()
+            .is_err());
     }
 
     #[test]
     fn host_header_accepts_only_ip_literals_and_local_names() {
         for host in [
-            "192.168.1.5", "192.168.1.5:8099", "8.8.8.8:80", "[::1]", "[::1]:8099",
-            "[fe80::1]:8099", "::1", "localhost", "localhost:8099", "LOCALHOST.",
-            "station.local", "yandex-mini.local:8099",
+            "192.168.1.5",
+            "192.168.1.5:8099",
+            "8.8.8.8:80",
+            "[::1]",
+            "[::1]:8099",
+            "[fe80::1]:8099",
+            "::1",
+            "localhost",
+            "localhost:8099",
+            "LOCALHOST.",
+            "station.local",
+            "yandex-mini.local:8099",
         ] {
             assert!(host_header_allowed(host), "{host} should be allowed");
         }
         for host in [
-            "evil.com", "evil.com:8099", "192.168.1.5.nip.io", "local", ".local",
-            "[::1", "[::1]x", "[evil.com]:80", "192.168.1.5:abc", "localhost.evil.com", "",
+            "evil.com",
+            "evil.com:8099",
+            "192.168.1.5.nip.io",
+            "local",
+            ".local",
+            "[::1",
+            "[::1]x",
+            "[evil.com]:80",
+            "192.168.1.5:abc",
+            "localhost.evil.com",
+            "",
         ] {
             assert!(!host_header_allowed(host), "{host} should be rejected");
         }
@@ -6723,17 +6885,29 @@ mod tests {
     #[test]
     fn origin_accepts_only_loopback_private_and_local_names() {
         for origin in [
-            "http://127.0.0.1:8099", "http://localhost:8099", "http://10.1.2.3",
-            "http://172.16.0.1", "http://172.31.255.255", "http://192.168.1.10:8099",
-            "http://[::1]:8099", "http://[fd12::1]", "http://[::ffff:192.168.1.2]",
+            "http://127.0.0.1:8099",
+            "http://localhost:8099",
+            "http://10.1.2.3",
+            "http://172.16.0.1",
+            "http://172.31.255.255",
+            "http://192.168.1.10:8099",
+            "http://[::1]:8099",
+            "http://[fd12::1]",
+            "http://[::ffff:192.168.1.2]",
             "https://station.local",
         ] {
             assert!(origin_allowed(origin), "{origin} should be allowed");
         }
         for origin in [
-            "null", "https://evil.com", "http://8.8.8.8", "http://172.32.0.1",
-            "http://[2001:db8::1]", "http://[::ffff:8.8.8.8]", "file:///tmp/x.html",
-            "http://localhost.evil.com", "garbage",
+            "null",
+            "https://evil.com",
+            "http://8.8.8.8",
+            "http://172.32.0.1",
+            "http://[2001:db8::1]",
+            "http://[::ffff:8.8.8.8]",
+            "file:///tmp/x.html",
+            "http://localhost.evil.com",
+            "garbage",
         ] {
             assert!(!origin_allowed(origin), "{origin} should be rejected");
         }
@@ -6747,44 +6921,88 @@ mod tests {
                 .route("/api/x", get(|| async { "ok" }).post(|| async { "ok" }))
                 .layer(middleware::from_fn(browser_guard))
         };
-        let status = |request: Request<Body>| async move {
-            app().oneshot(request).await.unwrap().status()
+        let status =
+            |request: Request<Body>| async move { app().oneshot(request).await.unwrap().status() };
+        let base = || {
+            Request::builder()
+                .uri("/api/x")
+                .header("host", "192.168.1.5:8099")
         };
-        let base = || Request::builder().uri("/api/x").header("host", "192.168.1.5:8099");
         // CLI: no Origin, JSON or empty body.
-        assert_eq!(status(base().method("POST").body(Body::empty()).unwrap()).await, StatusCode::OK);
         assert_eq!(
-            status(base().method("POST").header("content-type", "application/json").body(Body::empty()).unwrap()).await,
+            status(base().method("POST").body(Body::empty()).unwrap()).await,
+            StatusCode::OK
+        );
+        assert_eq!(
+            status(
+                base()
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .body(Body::empty())
+                    .unwrap()
+            )
+            .await,
             StatusCode::OK
         );
         // DNS rebinding.
         assert_eq!(
-            status(Request::builder().uri("/api/x").header("host", "rebind.evil.com:8099").body(Body::empty()).unwrap()).await,
+            status(
+                Request::builder()
+                    .uri("/api/x")
+                    .header("host", "rebind.evil.com:8099")
+                    .body(Body::empty())
+                    .unwrap()
+            )
+            .await,
             StatusCode::FORBIDDEN
         );
         // Cross-site fetch / form.
         assert_eq!(
-            status(base().method("POST").header("origin", "https://evil.com").body(Body::empty()).unwrap()).await,
+            status(
+                base()
+                    .method("POST")
+                    .header("origin", "https://evil.com")
+                    .body(Body::empty())
+                    .unwrap()
+            )
+            .await,
             StatusCode::FORBIDDEN
         );
         assert_eq!(
-            status(base().method("POST").header("origin", "null").body(Body::empty()).unwrap()).await,
+            status(
+                base()
+                    .method("POST")
+                    .header("origin", "null")
+                    .body(Body::empty())
+                    .unwrap()
+            )
+            .await,
             StatusCode::FORBIDDEN
         );
         // Form-encoded mutation without the custom header (Origin omitted).
         assert_eq!(
-            status(base().method("POST").header("content-type", "multipart/form-data; boundary=x").body(Body::empty()).unwrap()).await,
+            status(
+                base()
+                    .method("POST")
+                    .header("content-type", "multipart/form-data; boundary=x")
+                    .body(Body::empty())
+                    .unwrap()
+            )
+            .await,
             StatusCode::FORBIDDEN
         );
         // Built-in UI: same-origin, with the custom header.
         assert_eq!(
             status(
-                base().method("POST")
+                base()
+                    .method("POST")
                     .header("origin", "http://192.168.1.5:8099")
                     .header("content-type", "multipart/form-data; boundary=x")
                     .header("x-luna-local", "1")
-                    .body(Body::empty()).unwrap()
-            ).await,
+                    .body(Body::empty())
+                    .unwrap()
+            )
+            .await,
             StatusCode::OK
         );
     }
@@ -6796,22 +7014,38 @@ mod tests {
         let _guard = CLOCK_REQUEST_TESTS.lock().unwrap();
         struct RecordingClock(std::sync::atomic::AtomicUsize);
         impl ClockBackend for RecordingClock {
-            fn segments(&self) -> Vec<String> { Vec::new() }
-            fn apply(&self, _: ClockCommand) -> Result<()> { self.0.store(1, Ordering::SeqCst); Ok(()) }
+            fn segments(&self) -> Vec<String> {
+                Vec::new()
+            }
+            fn apply(&self, _: ClockCommand) -> Result<()> {
+                self.0.store(1, Ordering::SeqCst);
+                Ok(())
+            }
             fn apply_music(&self, _: ClockCommand, policy: ClockMusicPolicy) -> Result<()> {
                 assert_eq!(policy, ClockMusicPolicy::default());
-                self.0.store(2, Ordering::SeqCst); Ok(())
+                self.0.store(2, Ordering::SeqCst);
+                Ok(())
             }
         }
         struct LegacyClock(std::sync::atomic::AtomicBool);
         impl ClockBackend for LegacyClock {
-            fn segments(&self) -> Vec<String> { Vec::new() }
-            fn apply(&self, _: ClockCommand) -> Result<()> { self.0.store(true, Ordering::SeqCst); Ok(()) }
+            fn segments(&self) -> Vec<String> {
+                Vec::new()
+            }
+            fn apply(&self, _: ClockCommand) -> Result<()> {
+                self.0.store(true, Ordering::SeqCst);
+                Ok(())
+            }
         }
         let legacy = LegacyClock(std::sync::atomic::AtomicBool::new(false));
         assert!(!legacy.music_policy_available());
         assert!(!legacy.native_control_available());
-        legacy.apply_music(ClockCommand::Segments(HashMap::new()), ClockMusicPolicy::default()).unwrap();
+        legacy
+            .apply_music(
+                ClockCommand::Segments(HashMap::new()),
+                ClockMusicPolicy::default(),
+            )
+            .unwrap();
         assert!(legacy.0.load(Ordering::SeqCst));
         let backend = Arc::new(RecordingClock(std::sync::atomic::AtomicUsize::new(0)));
         let clock: Arc<dyn ClockBackend> = backend.clone();
@@ -6838,7 +7072,10 @@ mod tests {
         for json in [r#"{"mode":"invalid"}"#, r#"{"wave_seconds":-1}"#] {
             assert!(serde_json::from_str::<ClockMusicPolicy>(json).is_err());
         }
-        assert_eq!(serde_json::from_str::<ClockMusicPolicy>("{}").unwrap(), ClockMusicPolicy::default());
+        assert_eq!(
+            serde_json::from_str::<ClockMusicPolicy>("{}").unwrap(),
+            ClockMusicPolicy::default()
+        );
     }
 
     #[test]
@@ -6846,9 +7083,27 @@ mod tests {
         let _guard = CLOCK_REQUEST_TESTS.lock().unwrap();
         let before = CLOCK_TEXT_EPOCH.load(Ordering::SeqCst);
         for request in [
-            ClockRequest { music: None, time: None, brightness: None, segments: None, off: false },
-            ClockRequest { music: None, time: Some("invalid".into()), brightness: None, segments: None, off: false },
-            ClockRequest { music: None, time: None, brightness: None, segments: Some(HashMap::from([("INVALID".into(), 100)])), off: false },
+            ClockRequest {
+                music: None,
+                time: None,
+                brightness: None,
+                segments: None,
+                off: false,
+            },
+            ClockRequest {
+                music: None,
+                time: Some("invalid".into()),
+                brightness: None,
+                segments: None,
+                off: false,
+            },
+            ClockRequest {
+                music: None,
+                time: None,
+                brightness: None,
+                segments: Some(HashMap::from([("INVALID".into(), 100)])),
+                off: false,
+            },
         ] {
             assert!(put_clock_request(None, request).is_err());
             assert_eq!(CLOCK_TEXT_EPOCH.load(Ordering::SeqCst), before);
@@ -6858,18 +7113,37 @@ mod tests {
     #[test]
     fn clock_overlay_duration_is_bounded() {
         for duration_ms in [0, 15001, u64::MAX] {
-            assert!(validate_clock_text(&ClockTextRequest { text: "HI".into(), brightness: 100, duration_ms }).is_err());
+            assert!(validate_clock_text(&ClockTextRequest {
+                text: "HI".into(),
+                brightness: 100,
+                duration_ms
+            })
+            .is_err());
         }
         for duration_ms in [1, 99, 2000, 15000] {
-            assert!(validate_clock_text(&ClockTextRequest { text: "HI".into(), brightness: 100, duration_ms }).is_ok());
+            assert!(validate_clock_text(&ClockTextRequest {
+                text: "HI".into(),
+                brightness: 100,
+                duration_ms
+            })
+            .is_ok());
         }
     }
 
     #[test]
     fn text_capability_requires_supported_layout_and_no_station_backend() {
-        assert!(clock_text_available(false, Some(&ClockLayout::Cucumber("test".into()))));
-        assert!(!clock_text_available(true, Some(&ClockLayout::Cucumber("test".into()))));
-        assert!(!clock_text_available(false, Some(&ClockLayout::Mini2("test".into()))));
+        assert!(clock_text_available(
+            false,
+            Some(&ClockLayout::Cucumber("test".into()))
+        ));
+        assert!(!clock_text_available(
+            true,
+            Some(&ClockLayout::Cucumber("test".into()))
+        ));
+        assert!(!clock_text_available(
+            false,
+            Some(&ClockLayout::Mini2("test".into()))
+        ));
         assert!(!clock_text_available(false, None));
     }
 
@@ -6952,7 +7226,10 @@ mod tests {
             });
             std::env::set_var("LUNA_ALICED_ADDR", address.to_string());
             reset_alice_stream();
-            Self { clients, _serial: serial }
+            Self {
+                clients,
+                _serial: serial,
+            }
         }
         fn wait_clients(&self, count: usize) {
             let deadline = Instant::now() + Duration::from_secs(5);
@@ -7034,7 +7311,10 @@ mod tests {
             aliced.wait_clients(2);
             aliced.emit(&aliced_final_frame("both"));
             assert_eq!(long.join().unwrap().unwrap().unwrap()["transcript"], "both");
-            assert_eq!(other.join().unwrap().unwrap().unwrap()["transcript"], "both");
+            assert_eq!(
+                other.join().unwrap().unwrap().unwrap()["transcript"],
+                "both"
+            );
         });
     }
 
@@ -7044,7 +7324,9 @@ mod tests {
         let query = |text: &str| {
             Query::<AliceCommandQuery>::try_from_uri(&format!("/?{text}").parse().unwrap()).unwrap()
         };
-        let default = get_alice_command(query("timeout_ms=50")).await.into_response();
+        let default = get_alice_command(query("timeout_ms=50"))
+            .await
+            .into_response();
         assert_eq!(default.status(), StatusCode::BAD_REQUEST);
         let empty = get_alice_command(query("timeout_ms=50&empty_on_timeout=true"))
             .await
@@ -7054,7 +7336,9 @@ mod tests {
             .await
             .into_response();
         assert_eq!(speech.status(), StatusCode::NO_CONTENT);
-        let speech_default = get_alice_speech(query("timeout_ms=50")).await.into_response();
+        let speech_default = get_alice_speech(query("timeout_ms=50"))
+            .await
+            .into_response();
         assert_eq!(speech_default.status(), StatusCode::BAD_REQUEST);
         let recognition = recognize_alice_speech(query("timeout_ms=50&empty_on_timeout=true"))
             .await
@@ -7068,9 +7352,10 @@ mod tests {
         // A poll leaves the shared stream open, then aliced says something.
         assert!(wait_alice_speech(50, true).unwrap().is_none());
         aliced.emit(&aliced_final_frame("older phrase"));
-        let query =
-            Query::<AliceCommandQuery>::try_from_uri(&"/?timeout_ms=150&empty_on_timeout=true".parse().unwrap())
-                .unwrap();
+        let query = Query::<AliceCommandQuery>::try_from_uri(
+            &"/?timeout_ms=150&empty_on_timeout=true".parse().unwrap(),
+        )
+        .unwrap();
         let response = recognize_alice_speech(query).await.into_response();
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
     }
@@ -7277,26 +7562,56 @@ mod lifecycle_tests {
         let mut settings = Settings::default();
         settings.allow_plugin_binaries = true;
         let app = App {
-            root, settings: Arc::new(Mutex::new(settings)),
-            device: Arc::new(Mutex::new(DeviceProfile { model: "test".into(), architecture: "x86_64".into(), features: vec![], source: "test".into(), led: LedTopology::default() })),
-            led: Arc::new(Led { panel_preview: Arc::new(Mutex::new(led_panel::Preview::default())), settings: Arc::new(Mutex::new(LedSettings::default())), backend: None, color_order: ColorOrder::Rgb, calibration: None, topology: LedTopology::default() }),
-            microphone: None, clock: None, plugins: Arc::new(Mutex::new(manager)),
-            runtime_tokens: Arc::new(Mutex::new(HashMap::new())), speech_readers: Arc::new(Mutex::new(HashMap::new())), alice_readers: Arc::new(Mutex::new(HashMap::new())), speech_claims: Arc::new(Mutex::new(HashMap::new())),
+            root,
+            settings: Arc::new(Mutex::new(settings)),
+            device: Arc::new(Mutex::new(DeviceProfile {
+                model: "test".into(),
+                architecture: "x86_64".into(),
+                features: vec![],
+                source: "test".into(),
+                led: LedTopology::default(),
+            })),
+            led: Arc::new(Led {
+                panel_preview: Arc::new(Mutex::new(led_panel::Preview::default())),
+                settings: Arc::new(Mutex::new(LedSettings::default())),
+                backend: None,
+                color_order: ColorOrder::Rgb,
+                calibration: None,
+                topology: LedTopology::default(),
+            }),
+            microphone: None,
+            clock: None,
+            plugins: Arc::new(Mutex::new(manager)),
+            runtime_tokens: Arc::new(Mutex::new(HashMap::new())),
+            speech_readers: Arc::new(Mutex::new(HashMap::new())),
+            alice_readers: Arc::new(Mutex::new(HashMap::new())),
+            speech_claims: Arc::new(Mutex::new(HashMap::new())),
             providers: Arc::new(Mutex::new(providers::Broker::default())),
             custom_web: Arc::new(Mutex::new(HashMap::new())),
-            runtime_api_url: "http://127.0.0.1:1".into(), input_actions: &[], input_gestures: &[], gpio_inputs: &[],
+            runtime_api_url: "http://127.0.0.1:1".into(),
+            input_actions: &[],
+            input_gestures: &[],
+            gpio_inputs: &[],
         };
-        start_package(app.clone(), "test-service".into(), vec![]).await.unwrap();
+        start_package(app.clone(), "test-service".into(), vec![])
+            .await
+            .unwrap();
         tokio::time::timeout(Duration::from_secs(5), async {
-            while !package.join("ready").exists() { tokio::time::sleep(Duration::from_millis(10)).await; }
-        }).await.unwrap();
+            while !package.join("ready").exists() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
         (app, package)
     }
 
     #[tokio::test]
     async fn stop_endpoint_waits_for_recovery() {
         let (app, package) = fixture().await;
-        stop_plugin(State(app.clone()), AxumPath("test-service".into())).await.unwrap();
+        stop_plugin(State(app.clone()), AxumPath("test-service".into()))
+            .await
+            .unwrap();
         let cleaned = package.join("cleaned").exists();
         tokio::time::sleep(Duration::from_secs(1)).await;
         fs::remove_dir_all(&app.root).unwrap();
@@ -7305,10 +7620,17 @@ mod lifecycle_tests {
     #[tokio::test]
     async fn restart_waits_for_previous_recovery() {
         let (app, package) = fixture().await;
-        start_package(app.clone(), "test-service".into(), vec![]).await.unwrap();
+        start_package(app.clone(), "test-service".into(), vec![])
+            .await
+            .unwrap();
         tokio::time::sleep(Duration::from_millis(100)).await;
-        stop_plugin(State(app.clone()), AxumPath("test-service".into())).await.unwrap();
-        assert!(!package.join("overlap").exists(), "replacement started before old recovery");
+        stop_plugin(State(app.clone()), AxumPath("test-service".into()))
+            .await
+            .unwrap();
+        assert!(
+            !package.join("overlap").exists(),
+            "replacement started before old recovery"
+        );
         assert!(package.join("cleaned").exists());
         fs::remove_dir_all(&app.root).unwrap();
     }
@@ -7320,7 +7642,9 @@ mod lifecycle_tests {
         assert!(package.join("cleaned").exists());
         assert!(app.plugins.lock().await.running.is_empty());
         assert!(app.runtime_tokens.lock().await.is_empty());
-        assert!(start_package(app.clone(), "test-service".into(), vec![]).await.is_err());
+        assert!(start_package(app.clone(), "test-service".into(), vec![])
+            .await
+            .is_err());
         fs::remove_dir_all(&app.root).unwrap();
     }
 
@@ -7331,7 +7655,9 @@ mod lifecycle_tests {
         let token = app.runtime_tokens.lock().await.get(id).unwrap().clone();
         let mut headers = HeaderMap::new();
         headers.insert("x-luna-token", token.parse().unwrap());
-        runtime_permission(&app, id, &headers, "exec").await.unwrap();
+        runtime_permission(&app, id, &headers, "exec")
+            .await
+            .unwrap();
         // Same invocation, same descriptor path: policy edits must immediately
         // apply even after a successful, cached authorization.
         let path = package.join("plugin.toml");
@@ -7339,15 +7665,25 @@ mod lifecycle_tests {
         let changed = original.replace("permissions=['exec']", "permissions=['clock']");
         assert_ne!(changed, original);
         fs::write(&path, &changed).unwrap();
-        assert!(runtime_permission(&app, id, &headers, "exec").await.is_err());
-        runtime_permission(&app, id, &headers, "clock").await.unwrap();
+        assert!(runtime_permission(&app, id, &headers, "exec")
+            .await
+            .is_err());
+        runtime_permission(&app, id, &headers, "clock")
+            .await
+            .unwrap();
         fs::write(&path, changed.replace("kind='binary'", "kind=42")).unwrap();
-        assert!(runtime_permission(&app, id, &headers, "clock").await.is_err());
+        assert!(runtime_permission(&app, id, &headers, "clock")
+            .await
+            .is_err());
         fs::write(&path, original).unwrap();
-        runtime_permission(&app, id, &headers, "exec").await.unwrap();
+        runtime_permission(&app, id, &headers, "exec")
+            .await
+            .unwrap();
         // A cache hit must not bypass invocation-token revocation.
         app.runtime_tokens.lock().await.remove(id);
-        assert!(runtime_permission(&app, id, &headers, "exec").await.is_err());
+        assert!(runtime_permission(&app, id, &headers, "exec")
+            .await
+            .is_err());
         stop_all_packages(&app).await;
         fs::remove_dir_all(&app.root).unwrap();
     }
@@ -7355,7 +7691,10 @@ mod lifecycle_tests {
     #[tokio::test]
     async fn incomplete_cleanup_times_out_and_remains_cancelled() {
         let (_finished, receiver) = tokio::sync::watch::channel(false);
-        let run = RunningPackage { cancelled: Arc::new(AtomicBool::new(false)), finished: receiver };
+        let run = RunningPackage {
+            cancelled: Arc::new(AtomicBool::new(false)),
+            finished: receiver,
+        };
         assert!(run.stop(Duration::from_millis(20)).await.is_err());
         assert!(run.cancelled.load(Ordering::Relaxed));
         assert!(!*run.finished.borrow());
@@ -7371,15 +7710,22 @@ mod lifecycle_tests {
         first.unwrap();
         second.unwrap();
         tokio::time::sleep(Duration::from_millis(100)).await;
-        stop_plugin(State(app.clone()), AxumPath("test-service".into())).await.unwrap();
-        assert!(!package.join("overlap").exists(), "concurrent replacements overlapped");
+        stop_plugin(State(app.clone()), AxumPath("test-service".into()))
+            .await
+            .unwrap();
+        assert!(
+            !package.join("overlap").exists(),
+            "concurrent replacements overlapped"
+        );
         fs::remove_dir_all(&app.root).unwrap();
     }
 
     async fn yam_binary_fixture() -> (App, PathBuf, PathBuf) {
         use std::os::unix::fs::symlink;
         let (app, _) = fixture().await;
-        stop_plugin(State(app.clone()), AxumPath("test-service".into())).await.unwrap();
+        stop_plugin(State(app.clone()), AxumPath("test-service".into()))
+            .await
+            .unwrap();
         let yam = app.root.join("yam");
         let run = app.root.join("yam-run");
         let selected = yam.join("pkgs/example/worker/1.0.0");
@@ -7420,37 +7766,60 @@ mod lifecycle_tests {
         let shared = app.root.join("yam/share/luna/plugins/example.page");
         fs::create_dir_all(&shared).unwrap();
         for version in ["1.0.0", "1.0.1"] {
-            let root = package.join(version).join("share/luna/plugins/example.page");
+            let root = package
+                .join(version)
+                .join("share/luna/plugins/example.page");
             fs::create_dir_all(&root).unwrap();
             fs::write(root.join("plugin.toml"), format!(
                 "id='example.page'\nname='Page'\nversion='{version}'\nentry='main.lua'\npermissions=['web']\n[launch]\nmode='service'\n")).unwrap();
-            fs::write(root.join("main.lua"),
-                "register.customweb('index.html')\nwhile true do alice.sleep(10) end").unwrap();
+            fs::write(
+                root.join("main.lua"),
+                "register.customweb('index.html')\nwhile true do alice.sleep(10) end",
+            )
+            .unwrap();
             fs::write(root.join("index.html"), format!("<h1>{version}</h1>")).unwrap();
         }
-        app.plugins.lock().await.enabled.insert("example.page".into());
+        app.plugins
+            .lock()
+            .await
+            .enabled
+            .insert("example.page".into());
         for version in ["1.0.0", "1.0.1"] {
             let current = package.join("current");
-            if current.exists() { fs::remove_file(&current).unwrap(); }
+            if current.exists() {
+                fs::remove_file(&current).unwrap();
+            }
             symlink(version, &current).unwrap();
-            let root = package.join(version).join("share/luna/plugins/example.page");
+            let root = package
+                .join(version)
+                .join("share/luna/plugins/example.page");
             for name in ["plugin.toml", "main.lua", "index.html"] {
                 let file = shared.join(name);
-                if file.exists() { fs::remove_file(&file).unwrap(); }
+                if file.exists() {
+                    fs::remove_file(&file).unwrap();
+                }
                 symlink(root.join(name), file).unwrap();
             }
-            start_package(app.clone(), "example.page".into(), vec![]).await.unwrap();
+            start_package(app.clone(), "example.page".into(), vec![])
+                .await
+                .unwrap();
             tokio::time::timeout(Duration::from_secs(5), async {
                 while !app.custom_web.lock().await.contains_key("example.page") {
                     tokio::time::sleep(Duration::from_millis(10)).await;
                 }
-            }).await.unwrap();
+            })
+            .await
+            .unwrap();
             let Html(page) = custom_web(State(app.clone()), AxumPath("example.page".into()))
-                .await.unwrap();
+                .await
+                .unwrap();
             assert_eq!(page, format!("<h1>{version}</h1>"));
             let device = app.device.lock().await.clone();
             let plugins = app.plugins.lock().await.list(&device).unwrap();
-            let page_info = plugins.iter().find(|p| p.manifest.id == "example.page").unwrap();
+            let page_info = plugins
+                .iter()
+                .find(|p| p.manifest.id == "example.page")
+                .unwrap();
             assert_eq!(page_info.package.as_deref(), Some("example/worker"));
             assert!(!yam_exclusive_available(&run));
             // The existing HTTP path containment check remains enforced.
@@ -7458,17 +7827,28 @@ mod lifecycle_tests {
             let foreign = app.root.join("foreign.html");
             fs::write(&foreign, "private").unwrap();
             symlink(foreign, root.join("index.html")).unwrap();
-            assert!(custom_web(State(app.clone()), AxumPath("example.page".into()))
-                .await.is_err());
-            stop_plugin(State(app.clone()), AxumPath("example.page".into())).await.unwrap();
+            assert!(
+                custom_web(State(app.clone()), AxumPath("example.page".into()))
+                    .await
+                    .is_err()
+            );
+            stop_plugin(State(app.clone()), AxumPath("example.page".into()))
+                .await
+                .unwrap();
             assert!(yam_exclusive_available(&run));
             assert!(!app.custom_web.lock().await.contains_key("example.page"));
         }
         // Package removal leaves no local .yap or copied HTML behind.
         fs::remove_dir_all(&shared).unwrap();
         fs::remove_dir_all(&package).unwrap();
-        assert!(custom_web(State(app.clone()), AxumPath("example.page".into())).await.is_err());
-        stop_plugin(State(app.clone()), AxumPath("test-service".into())).await.unwrap();
+        assert!(
+            custom_web(State(app.clone()), AxumPath("example.page".into()))
+                .await
+                .is_err()
+        );
+        stop_plugin(State(app.clone()), AxumPath("test-service".into()))
+            .await
+            .unwrap();
         fs::remove_dir_all(&app.root).unwrap();
     }
 
@@ -7477,28 +7857,62 @@ mod lifecycle_tests {
         let (app, state, run) = yam_binary_fixture().await;
         let device = app.device.lock().await.clone();
         let visible = app.plugins.lock().await.list(&device).unwrap();
-        let plugin = visible.iter().find(|p| p.manifest.id == "example.worker").unwrap();
+        let plugin = visible
+            .iter()
+            .find(|p| p.manifest.id == "example.worker")
+            .unwrap();
         assert!(plugin.compatible);
         assert_eq!(plugin.source, PluginSource::Yam);
-        start_package(app.clone(), "example.worker".into(), vec![]).await.unwrap();
+        start_package(app.clone(), "example.worker".into(), vec![])
+            .await
+            .unwrap();
         tokio::time::timeout(Duration::from_secs(5), async {
-            while !state.join("ready").exists() { tokio::time::sleep(Duration::from_millis(10)).await; }
-        }).await.unwrap();
+            while !state.join("ready").exists() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
         assert!(!yam_exclusive_available(&run));
-        assert_eq!(fs::read_to_string(state.join("id")).unwrap(), "example.worker");
+        assert_eq!(
+            fs::read_to_string(state.join("id")).unwrap(),
+            "example.worker"
+        );
         let cwd = fs::read_to_string(state.join("cwd")).unwrap();
-        assert!(cwd.trim().ends_with("pkgs/example/worker/1.0.0/share/luna/plugins/example.worker"));
-        let token = app.runtime_tokens.lock().await.get("example.worker").unwrap().clone();
+        assert!(cwd
+            .trim()
+            .ends_with("pkgs/example/worker/1.0.0/share/luna/plugins/example.worker"));
+        let token = app
+            .runtime_tokens
+            .lock()
+            .await
+            .get("example.worker")
+            .unwrap()
+            .clone();
         let mut headers = HeaderMap::new();
         headers.insert("x-luna-token", token.parse().unwrap());
-        runtime_permission(&app, "example.worker", &headers, "exec").await.unwrap();
-        assert!(runtime_permission(&app, "example.worker", &headers, "sensors").await.is_err());
-        assert!(runtime_permission(&app, "example.other", &headers, "exec").await.is_err());
-        stop_plugin(State(app.clone()), AxumPath("example.worker".into())).await.unwrap();
+        runtime_permission(&app, "example.worker", &headers, "exec")
+            .await
+            .unwrap();
+        assert!(
+            runtime_permission(&app, "example.worker", &headers, "sensors")
+                .await
+                .is_err()
+        );
+        assert!(runtime_permission(&app, "example.other", &headers, "exec")
+            .await
+            .is_err());
+        stop_plugin(State(app.clone()), AxumPath("example.worker".into()))
+            .await
+            .unwrap();
         assert!(state.join("cleaned").exists());
         assert!(yam_exclusive_available(&run));
-        assert!(runtime_permission(&app, "example.worker", &headers, "exec").await.is_err());
-        package_logs(State(app.clone()), AxumPath("example.worker".into())).await.unwrap();
+        assert!(runtime_permission(&app, "example.worker", &headers, "exec")
+            .await
+            .is_err());
+        package_logs(State(app.clone()), AxumPath("example.worker".into()))
+            .await
+            .unwrap();
         fs::remove_dir_all(&app.root).unwrap();
     }
 
@@ -7506,29 +7920,55 @@ mod lifecycle_tests {
     async fn yam_binary_still_requires_enable_and_admin_opt_in() {
         let (app, state, run) = yam_binary_fixture().await;
         app.settings.lock().await.allow_plugin_binaries = false;
-        assert!(start_package(app.clone(), "example.worker".into(), vec![]).await.is_err());
+        assert!(start_package(app.clone(), "example.worker".into(), vec![])
+            .await
+            .is_err());
         app.settings.lock().await.allow_plugin_binaries = true;
         app.plugins.lock().await.enabled.remove("example.worker");
-        assert!(start_package(app.clone(), "example.worker".into(), vec![]).await.is_err());
+        assert!(start_package(app.clone(), "example.worker".into(), vec![])
+            .await
+            .is_err());
         assert!(!state.join("ready").exists());
         assert!(yam_exclusive_available(&run));
-        assert!(app.runtime_tokens.lock().await.get("example.worker").is_none());
+        assert!(app
+            .runtime_tokens
+            .lock()
+            .await
+            .get("example.worker")
+            .is_none());
         fs::remove_dir_all(&app.root).unwrap();
     }
 
     #[tokio::test]
     async fn yam_binary_failed_exit_releases_lease_and_runtime_token() {
         let (app, _state, run) = yam_binary_fixture().await;
-        let script = app.root.join("yam/pkgs/example/worker/1.0.0/share/luna/plugins/example.worker/run.sh");
+        let script = app
+            .root
+            .join("yam/pkgs/example/worker/1.0.0/share/luna/plugins/example.worker/run.sh");
         fs::write(script, "exit 7\n").unwrap();
-        start_package(app.clone(), "example.worker".into(), vec![]).await.unwrap();
+        start_package(app.clone(), "example.worker".into(), vec![])
+            .await
+            .unwrap();
         tokio::time::timeout(Duration::from_secs(5), async {
-            while app.plugins.lock().await.running.contains_key("example.worker") {
+            while app
+                .plugins
+                .lock()
+                .await
+                .running
+                .contains_key("example.worker")
+            {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
-        }).await.unwrap();
+        })
+        .await
+        .unwrap();
         assert!(yam_exclusive_available(&run));
-        assert!(app.runtime_tokens.lock().await.get("example.worker").is_none());
+        assert!(app
+            .runtime_tokens
+            .lock()
+            .await
+            .get("example.worker")
+            .is_none());
         fs::remove_dir_all(&app.root).unwrap();
     }
 
@@ -7536,7 +7976,9 @@ mod lifecycle_tests {
     async fn yam_dependency_resolution_is_declared_enabled_compatible_and_nonexecuting() {
         use std::os::unix::fs::symlink;
         let (app, state, run) = yam_binary_fixture().await;
-        let caller = app.root.join("yam/pkgs/example/worker/1.0.0/share/luna/plugins/example.worker/plugin.toml");
+        let caller = app
+            .root
+            .join("yam/pkgs/example/worker/1.0.0/share/luna/plugins/example.worker/plugin.toml");
         let mut text = fs::read_to_string(&caller).unwrap();
         text.push_str("\n[dependencies]\nstation-volume='station.volume'\n");
         fs::write(&caller, text).unwrap();
@@ -7548,17 +7990,43 @@ mod lifecycle_tests {
         symlink("1.0.2", selected.parent().unwrap().join("current")).unwrap();
         let descriptor = "id='station.volume'\nname='Volume'\nversion='1.0.2'\nentry='station-volume.sh'\npermissions=['exec']\n[launch]\nkind='binary'\ninterpreter='sh'\n";
         fs::write(root.join("plugin.toml"), descriptor).unwrap();
-        fs::write(root.join("station-volume.sh"), "touch unexpectedly-executed\n").unwrap();
+        fs::write(
+            root.join("station-volume.sh"),
+            "touch unexpectedly-executed\n",
+        )
+        .unwrap();
         symlink(root.join("plugin.toml"), shared.join("plugin.toml")).unwrap();
-        app.plugins.lock().await.enabled.insert("station.volume".into());
-        start_package(app.clone(), "example.worker".into(), vec![]).await.unwrap();
+        app.plugins
+            .lock()
+            .await
+            .enabled
+            .insert("station.volume".into());
+        start_package(app.clone(), "example.worker".into(), vec![])
+            .await
+            .unwrap();
         tokio::time::timeout(Duration::from_secs(5), async {
-            while !state.join("ready").exists() { tokio::time::sleep(Duration::from_millis(10)).await; }
-        }).await.unwrap();
-        let token = app.runtime_tokens.lock().await.get("example.worker").unwrap().clone();
+            while !state.join("ready").exists() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let token = app
+            .runtime_tokens
+            .lock()
+            .await
+            .get("example.worker")
+            .unwrap()
+            .clone();
         let mut headers = HeaderMap::new();
         headers.insert("x-luna-token", token.parse().unwrap());
-        let resolve = |alias: &str| dependencies::resolve(State(app.clone()), AxumPath(("example.worker".into(), alias.into())), headers.clone());
+        let resolve = |alias: &str| {
+            dependencies::resolve(
+                State(app.clone()),
+                AxumPath(("example.worker".into(), alias.into())),
+                headers.clone(),
+            )
+        };
         assert!(resolve("undeclared").await.is_err());
         let Json(launcher) = resolve("station-volume").await.unwrap();
         assert_eq!(launcher.plugin_id, "station.volume");
@@ -7568,18 +8036,31 @@ mod lifecycle_tests {
         assert!(!yam_exclusive_available(&run));
         app.plugins.lock().await.enabled.remove("station.volume");
         assert!(resolve("station-volume").await.is_err());
-        app.plugins.lock().await.enabled.insert("station.volume".into());
-        fs::write(root.join("plugin.toml"), format!("{descriptor}\n[compatibility]\nmodels=['not-this-device']\n")).unwrap();
+        app.plugins
+            .lock()
+            .await
+            .enabled
+            .insert("station.volume".into());
+        fs::write(
+            root.join("plugin.toml"),
+            format!("{descriptor}\n[compatibility]\nmodels=['not-this-device']\n"),
+        )
+        .unwrap();
         assert!(resolve("station-volume").await.is_err());
-        fs::write(root.join("plugin.toml"), format!("{descriptor}mode='service'\n")).unwrap();
+        fs::write(
+            root.join("plugin.toml"),
+            format!("{descriptor}mode='service'\n"),
+        )
+        .unwrap();
         assert!(resolve("station-volume").await.is_err());
         fs::write(root.join("plugin.toml"), descriptor).unwrap();
-        stop_plugin(State(app.clone()), AxumPath("example.worker".into())).await.unwrap();
+        stop_plugin(State(app.clone()), AxumPath("example.worker".into()))
+            .await
+            .unwrap();
         assert!(resolve("station-volume").await.is_err());
         assert!(yam_exclusive_available(&run));
         fs::remove_dir_all(&app.root).unwrap();
     }
-
 }
 
 #[cfg(test)]
@@ -7615,10 +8096,9 @@ mod led_calibration_tests {
 
     #[test]
     fn identity_calibration_is_a_no_op() {
-        let calibration = LedCalibration::parse(
-            r#"{"type":"matrix","matrix":[[1,0,0],[0,1,0],[0,0,1]]}"#,
-        )
-        .unwrap();
+        let calibration =
+            LedCalibration::parse(r#"{"type":"matrix","matrix":[[1,0,0],[0,1,0],[0,0,1]]}"#)
+                .unwrap();
         assert_eq!(calibration.apply(12, 200, 77), (12, 200, 77));
     }
 }

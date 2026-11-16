@@ -14,7 +14,10 @@ pub(crate) fn frames(text: &str, brightness: u8) -> Result<Vec<BTreeMap<String, 
         (1..=32).contains(&text.len()),
         "clock text must contain 1 to 32 characters"
     );
-    anyhow::ensure!(text.bytes().any(|ch| ch != b' '), "clock text must not be blank");
+    anyhow::ensure!(
+        text.bytes().any(|ch| ch != b' '),
+        "clock text must not be blank"
+    );
     let glyphs: Vec<&str> = text.bytes().map(glyph).collect::<Result<_>>()?;
     let mut padded = Vec::new();
     if glyphs.len() <= 4 {
@@ -94,14 +97,22 @@ mod tests {
         let rendered = frames("SP", 70).unwrap();
         assert_eq!(rendered.len(), 1);
         assert_eq!(rendered[0].len(), 28);
-        assert_eq!(lit(&rendered[0]), ["A2", "A3", "B3", "C2", "D2", "E3", "F2", "F3", "G2", "G3"]);
-        assert!(rendered[0].values().all(|value| *value == 0 || *value == 70));
+        assert_eq!(
+            lit(&rendered[0]),
+            ["A2", "A3", "B3", "C2", "D2", "E3", "F2", "F3", "G2", "G3"]
+        );
+        assert!(rendered[0]
+            .values()
+            .all(|value| *value == 0 || *value == 70));
     }
 
     #[test]
     fn centers_short_text_with_extra_blank_on_right() {
         assert_eq!(lit(&frames("1", 100).unwrap()[0]), ["B2", "C2"]);
-        assert_eq!(lit(&frames("111", 100).unwrap()[0]), ["B1", "B2", "B3", "C1", "C2", "C3"]);
+        assert_eq!(
+            lit(&frames("111", 100).unwrap()[0]),
+            ["B1", "B2", "B3", "C1", "C2", "C3"]
+        );
         assert_eq!(frames("1111", 100).unwrap().len(), 1);
     }
 
@@ -111,7 +122,10 @@ mod tests {
         assert_eq!(rendered.len(), 10);
         assert!(lit(&rendered[0]).is_empty());
         assert_eq!(lit(&rendered[1]), ["B4", "C4"]);
-        assert_eq!(lit(&rendered[4]), ["B1", "B2", "B3", "B4", "C1", "C2", "C3", "C4"]);
+        assert_eq!(
+            lit(&rendered[4]),
+            ["B1", "B2", "B3", "B4", "C1", "C2", "C3", "C4"]
+        );
         assert_eq!(lit(&rendered[8]), ["B1", "C1"]);
         assert!(lit(&rendered[9]).is_empty());
         assert!(rendered.iter().all(|frame| frame.len() == 28));
@@ -119,13 +133,28 @@ mod tests {
 
     #[test]
     fn validates_input_before_rendering() {
-        for text in ["", "   ", "Привет", "é", "hi\n", "@", "W", "M", "K", "V", "X", "Z"] {
+        for text in [
+            "",
+            "   ",
+            "Привет",
+            "é",
+            "hi\n",
+            "@",
+            "W",
+            "M",
+            "K",
+            "V",
+            "X",
+            "Z",
+        ] {
             assert!(frames(text, 50).is_err(), "accepted {text:?}");
         }
         assert!(frames("SP", 101).is_err());
         assert!(frames(&"1".repeat(33), 50).is_err());
         assert_eq!(frames(&"1".repeat(32), 50).unwrap().len(), 37);
-        assert!(frames("SP", 0).unwrap()[0].values().all(|value| *value == 0));
+        assert!(frames("SP", 0).unwrap()[0]
+            .values()
+            .all(|value| *value == 0));
     }
 
     #[test]

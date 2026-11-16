@@ -128,7 +128,8 @@ mod tests {
 
     #[test]
     fn supervisor_can_recover_before_dependencies_receive_term() {
-        let mut f = Fixture::start(r#"
+        let mut f = Fixture::start(
+            r#"
             sh -c 'trap "touch helper-stopped; exit 0" TERM; touch helper-ready; while :; do sleep 0.02; done' &
             helper=$!
             echo "$helper" > helper.pid
@@ -136,7 +137,8 @@ mod tests {
             trap 'sleep 0.15; if [ ! -f helper-stopped ]; then touch recovered; fi; kill "$helper"; wait "$helper"; exit 0' TERM
             touch ready
             while :; do sleep 0.02; done
-        "#);
+        "#,
+        );
         stop_process_group(&mut f.child);
         assert!(
             f.dir.join("recovered").exists(),
@@ -147,14 +149,16 @@ mod tests {
 
     #[test]
     fn stubborn_supervisor_and_helper_are_killed_within_bound() {
-        let mut f = Fixture::start(r#"
+        let mut f = Fixture::start(
+            r#"
             trap '' TERM
             sh -c 'trap "" TERM; touch helper-ready; while :; do sleep 0.02; done' &
             echo "$!" > helper.pid
             while [ ! -f helper-ready ]; do sleep 0.01; done
             touch ready
             while :; do sleep 0.02; done
-        "#);
+        "#,
+        );
         let started = Instant::now();
         f.stop();
         assert!(started.elapsed() < Duration::from_secs(3));
@@ -164,13 +168,15 @@ mod tests {
 
     #[test]
     fn exited_supervisor_does_not_leave_stubborn_helper() {
-        let mut f = Fixture::start(r#"
+        let mut f = Fixture::start(
+            r#"
             sh -c 'trap "" TERM; touch helper-ready; while :; do sleep 0.02; done' &
             echo "$!" > helper.pid
             while [ ! -f helper-ready ]; do sleep 0.01; done
             touch ready
             exit 0
-        "#);
+        "#,
+        );
         f.child.wait().unwrap();
         f.stop();
         f.assert_helper_stopped();

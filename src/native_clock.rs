@@ -180,9 +180,10 @@ impl NativeClockLease {
     pub fn new(data_dir: &Path) -> Result<Self> {
         let compatible = fs::read("/proc/device-tree/compatible")?;
         ensure!(
-            compatible
-                .split(|byte| *byte == 0)
-                .any(|entry| matches!(entry, b"yandex,plum-evt2" | b"yandex,bergamot" | b"yandex,cucumber")),
+            compatible.split(|byte| *byte == 0).any(|entry| matches!(
+                entry,
+                b"yandex,plum-evt2" | b"yandex,bergamot" | b"yandex,cucumber"
+            )),
             "native clock control is not qualified on this board"
         );
         let config: serde_json::Value =
@@ -344,7 +345,8 @@ impl Inner {
             return Ok(());
         };
         if (!force && now < state.restore_after)
-            || state.hide_settle_until.is_some_and(|until| now < until) {
+            || state.hide_settle_until.is_some_and(|until| now < until)
+        {
             return Ok(());
         }
         state.restore_after = now + RESTORE_BACKOFF;

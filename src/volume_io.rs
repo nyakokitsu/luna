@@ -15,7 +15,9 @@ struct ChildGuard(Child);
 impl Drop for ChildGuard {
     fn drop(&mut self) {
         #[cfg(unix)]
-        unsafe { libc::kill(-(self.0.id() as libc::pid_t), libc::SIGKILL); }
+        unsafe {
+            libc::kill(-(self.0.id() as libc::pid_t), libc::SIGKILL);
+        }
         let _ = self.0.kill();
         let _ = self.0.wait();
     }
@@ -43,7 +45,10 @@ fn drain(mut pipe: impl Read + Send + 'static, tx: mpsc::Sender<std::io::Result<
 
 pub(super) fn bounded_output(command: &mut Command, timeout: Duration) -> Result<Output> {
     let deadline = Instant::now() + timeout;
-    command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -52,36 +57,59 @@ pub(super) fn bounded_output(command: &mut Command, timeout: Duration) -> Result
     let mut child = ChildGuard(command.spawn().context("start volume helper")?);
     let (out_tx, out_rx) = mpsc::channel();
     let (err_tx, err_rx) = mpsc::channel();
-    drain(child.0.stdout.take().context("volume helper stdout")?, out_tx);
-    drain(child.0.stderr.take().context("volume helper stderr")?, err_tx);
+    drain(
+        child.0.stdout.take().context("volume helper stdout")?,
+        out_tx,
+    );
+    drain(
+        child.0.stderr.take().context("volume helper stderr")?,
+        err_tx,
+    );
     let status = loop {
         if let Some(status) = child.0.try_wait().context("wait for volume helper")? {
             break status;
         }
-        if Instant::now() >= deadline { bail!("volume helper timed out"); }
+        if Instant::now() >= deadline {
+            bail!("volume helper timed out");
+        }
         std::thread::sleep(Duration::from_millis(10));
     };
     // A helper descendant may retain a pipe after the parent exits. Do not join
     // a reader indefinitely; the guard kills the process group on every exit.
-    let stdout = out_rx.recv_timeout(deadline.saturating_duration_since(Instant::now()))
+    let stdout = out_rx
+        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
         .context("volume helper stdout timed out")??;
-    let stderr = err_rx.recv_timeout(deadline.saturating_duration_since(Instant::now()))
+    let stderr = err_rx
+        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
         .context("volume helper stderr timed out")??;
-    Ok(Output { status, stdout, stderr })
+    Ok(Output {
+        status,
+        stdout,
+        stderr,
+    })
 }
 
 async fn dispatch_serialized<T, F>(operation: F) -> Result<T>
-where T: Send + 'static, F: FnOnce() -> Result<T> + Send + 'static {
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T> + Send + 'static,
+{
     static SLOT: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
-    let slot = SLOT.get_or_init(|| Arc::new(tokio::sync::Semaphore::new(1))).clone();
+    let slot = SLOT
+        .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(1)))
+        .clone();
     let permit = tokio::time::timeout(Duration::from_secs(1), slot.acquire_owned())
-        .await.context("volume backend is busy")?.context("volume backend unavailable")?;
+        .await
+        .context("volume backend is busy")?
+        .context("volume backend unavailable")?;
     tokio::task::spawn_blocking(move || {
         // Keep serialization until the real operation finishes, even if its
         // HTTP caller disconnects. No unbounded queue of blocking tasks.
         let _permit = permit;
         operation()
-    }).await.context("volume backend task failed")?
+    })
+    .await
+    .context("volume backend task failed")?
 }
 
 static WRITE_EPOCH: AtomicU64 = AtomicU64::new(0);
@@ -93,28 +121,38 @@ struct ReadFlight {
 static READ_FLIGHT: OnceLock<tokio::sync::Mutex<Option<Arc<ReadFlight>>>> = OnceLock::new();
 
 pub(super) async fn dispatch<T, F>(operation: F) -> Result<T>
-where T: Send + 'static, F: FnOnce() -> Result<T> + Send + 'static {
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T> + Send + 'static,
+{
     // A read arriving after a write request must never join a pre-write read.
     WRITE_EPOCH.fetch_add(1, Ordering::AcqRel);
     dispatch_serialized(move || {
         struct FinishWrite;
         impl Drop for FinishWrite {
-            fn drop(&mut self) { WRITE_EPOCH.fetch_add(1, Ordering::AcqRel); }
+            fn drop(&mut self) {
+                WRITE_EPOCH.fetch_add(1, Ordering::AcqRel);
+            }
         }
         // This lifetime follows real backend work, not a cancelled HTTP caller.
         let _finished = FinishWrite;
         operation()
-    }).await
+    })
+    .await
 }
 
 pub(super) async fn read_current<F>(operation: F) -> Result<u8>
-where F: FnOnce() -> Result<u8> + Send + 'static {
+where
+    F: FnOnce() -> Result<u8> + Send + 'static,
+{
     let slot = READ_FLIGHT.get_or_init(|| tokio::sync::Mutex::new(None));
     let (flight, start) = {
         let mut shared = slot.lock().await;
         let epoch = WRITE_EPOCH.load(Ordering::Acquire);
         match shared.as_ref() {
-            Some(current) if current.epoch == epoch && current.result.borrow().is_none() => (current.clone(), false),
+            Some(current) if current.epoch == epoch && current.result.borrow().is_none() => {
+                (current.clone(), false)
+            }
             _ => {
                 let (result, _) = tokio::sync::watch::channel(None);
                 let flight = Arc::new(ReadFlight { epoch, result });
@@ -126,10 +164,15 @@ where F: FnOnce() -> Result<u8> + Send + 'static {
     if start {
         let work = flight.clone();
         tokio::spawn(async move {
-            let result = dispatch_serialized(operation).await.map_err(|e| format!("{e:#}"));
+            let result = dispatch_serialized(operation)
+                .await
+                .map_err(|e| format!("{e:#}"));
             work.result.send_replace(Some(result));
             let mut shared = slot.lock().await;
-            if shared.as_ref().is_some_and(|current| Arc::ptr_eq(current, &work)) {
+            if shared
+                .as_ref()
+                .is_some_and(|current| Arc::ptr_eq(current, &work))
+            {
                 *shared = None;
             }
         });
@@ -139,7 +182,9 @@ where F: FnOnce() -> Result<u8> + Send + 'static {
         // Only concurrent in-flight reads are shared. No completed/stale value
         // is used as an answer to a new API request.
         let available = result.borrow().clone();
-        if let Some(value) = available { return value.map_err(anyhow::Error::msg); }
+        if let Some(value) = available {
+            return value.map_err(anyhow::Error::msg);
+        }
         result.changed().await.context("volume read task stopped")?;
     }
 }
@@ -151,7 +196,11 @@ mod tests {
 
     #[test]
     fn preserves_stdout_stderr_and_nonzero_exit() {
-        let output = bounded_output(Command::new("sh").args(["-c", "printf good; printf bad >&2; exit 7"]), Duration::from_secs(2)).unwrap();
+        let output = bounded_output(
+            Command::new("sh").args(["-c", "printf good; printf bad >&2; exit 7"]),
+            Duration::from_secs(2),
+        )
+        .unwrap();
         assert_eq!(output.status.code(), Some(7));
         assert_eq!(output.stdout, b"good");
         assert_eq!(output.stderr, b"bad");
@@ -159,7 +208,14 @@ mod tests {
 
     #[test]
     fn drains_large_output_without_unbounded_memory() {
-        let output = bounded_output(Command::new("sh").args(["-c", "head -c 131072 /dev/zero; head -c 131072 /dev/zero >&2"]), Duration::from_secs(3)).unwrap();
+        let output = bounded_output(
+            Command::new("sh").args([
+                "-c",
+                "head -c 131072 /dev/zero; head -c 131072 /dev/zero >&2",
+            ]),
+            Duration::from_secs(3),
+        )
+        .unwrap();
         assert!(output.status.success());
         assert_eq!(output.stdout.len(), MAX_OUTPUT);
         assert_eq!(output.stderr.len(), MAX_OUTPUT);
@@ -168,7 +224,10 @@ mod tests {
     #[test]
     fn hanging_helper_times_out() {
         let started = Instant::now();
-        let result = bounded_output(Command::new("sh").args(["-c", "exec sleep 30"]), Duration::from_millis(100));
+        let result = bounded_output(
+            Command::new("sh").args(["-c", "exec sleep 30"]),
+            Duration::from_millis(100),
+        );
         assert!(result.unwrap_err().to_string().contains("timed out"));
         assert!(started.elapsed() < Duration::from_secs(2));
     }
@@ -176,22 +235,40 @@ mod tests {
     #[test]
     fn inherited_pipe_cannot_extend_deadline() {
         let started = Instant::now();
-        let result = bounded_output(Command::new("sh").args(["-c", "sleep 30 & exit 0"]), Duration::from_millis(100));
+        let result = bounded_output(
+            Command::new("sh").args(["-c", "sleep 30 & exit 0"]),
+            Duration::from_millis(100),
+        );
         assert!(result.is_err());
         assert!(started.elapsed() < Duration::from_secs(2));
     }
 
     #[test]
     fn missing_program_returns_error() {
-        assert!(bounded_output(&mut Command::new("/definitely-missing-volume-helper"), Duration::from_secs(1)).is_err());
+        assert!(bounded_output(
+            &mut Command::new("/definitely-missing-volume-helper"),
+            Duration::from_secs(1)
+        )
+        .is_err());
     }
 
     #[cfg(target_os = "linux")]
     #[test]
     fn timeout_stops_parent_and_descendant() {
-        let path = std::env::temp_dir().join(format!("volume-pids-{}-{}", std::process::id(), uuid::Uuid::new_v4()));
-        let script = format!("echo $$ > '{}'; sleep 30 & echo $! >> '{}'; wait", path.display(), path.display());
-        let result = bounded_output(Command::new("sh").args(["-c", &script]), Duration::from_millis(500));
+        let path = std::env::temp_dir().join(format!(
+            "volume-pids-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let script = format!(
+            "echo $$ > '{}'; sleep 30 & echo $! >> '{}'; wait",
+            path.display(),
+            path.display()
+        );
+        let result = bounded_output(
+            Command::new("sh").args(["-c", &script]),
+            Duration::from_millis(500),
+        );
         assert!(result.is_err());
         let pids = std::fs::read_to_string(&path).unwrap();
         let _ = std::fs::remove_file(path);
@@ -199,8 +276,15 @@ mod tests {
         for pid in pids.lines() {
             let limit = Instant::now() + Duration::from_secs(1);
             loop {
-                let status = std::fs::read_to_string(format!("/proc/{pid}/status")).unwrap_or_default();
-                if status.is_empty() || status.lines().any(|s| s.starts_with("State:") && s.contains("Z (zombie)")) { break; }
+                let status =
+                    std::fs::read_to_string(format!("/proc/{pid}/status")).unwrap_or_default();
+                if status.is_empty()
+                    || status
+                        .lines()
+                        .any(|s| s.starts_with("State:") && s.contains("Z (zombie)"))
+                {
+                    break;
+                }
                 assert!(Instant::now() < limit, "helper {pid} still running");
                 std::thread::sleep(Duration::from_millis(10));
             }
@@ -214,7 +298,8 @@ mod tests {
         let active = Arc::new(AtomicUsize::new(0));
         let peak = Arc::new(AtomicUsize::new(0));
         let operation = || {
-            let active = active.clone(); let peak = peak.clone();
+            let active = active.clone();
+            let peak = peak.clone();
             move || {
                 let count = active.fetch_add(1, Ordering::SeqCst) + 1;
                 peak.fetch_max(count, Ordering::SeqCst);
@@ -223,8 +308,9 @@ mod tests {
                 Ok(())
             }
         };
-        let (a,b) = tokio::join!(dispatch(operation()), dispatch(operation()));
-        a.unwrap(); b.unwrap();
+        let (a, b) = tokio::join!(dispatch(operation()), dispatch(operation()));
+        a.unwrap();
+        b.unwrap();
         assert_eq!(peak.load(Ordering::SeqCst), 1);
     }
 
@@ -233,7 +319,8 @@ mod tests {
         let _serial = ASYNC_TEST_LOCK.lock().unwrap();
         let (tx, rx) = mpsc::channel();
         let backend = dispatch(move || {
-            rx.recv_timeout(Duration::from_secs(2)).context("async runtime stalled")?;
+            rx.recv_timeout(Duration::from_secs(2))
+                .context("async runtime stalled")?;
             bail!("fixture backend failure")
         });
         let heartbeat = async move {
@@ -242,7 +329,10 @@ mod tests {
         };
         let (result, _) = tokio::join!(backend, heartbeat);
         let result: Result<()> = result;
-        assert!(result.unwrap_err().to_string().contains("fixture backend failure"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("fixture backend failure"));
         assert_eq!(dispatch(|| Ok(42)).await.unwrap(), 42);
     }
 
@@ -259,7 +349,9 @@ mod tests {
                 Ok(42)
             })));
         }
-        for job in jobs { assert_eq!(job.await.unwrap().unwrap(), 42); }
+        for job in jobs {
+            assert_eq!(job.await.unwrap().unwrap(), 42);
+        }
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         assert_eq!(read_current(|| Ok(55)).await.unwrap(), 55);
     }
@@ -274,7 +366,14 @@ mod tests {
                 bail!("fixture read failed")
             })));
         }
-        for job in jobs { assert!(job.await.unwrap().unwrap_err().to_string().contains("fixture read failed")); }
+        for job in jobs {
+            assert!(job
+                .await
+                .unwrap()
+                .unwrap_err()
+                .to_string()
+                .contains("fixture read failed"));
+        }
         assert_eq!(read_current(|| Ok(77)).await.unwrap(), 77);
     }
 
@@ -287,7 +386,8 @@ mod tests {
             std::thread::sleep(Duration::from_millis(100));
             Ok(42)
         }));
-        started_rx.await.unwrap(); caller.abort();
+        started_rx.await.unwrap();
+        caller.abort();
         assert_eq!(read_current(|| Ok(99)).await.unwrap(), 42);
         assert_eq!(read_current(|| Ok(55)).await.unwrap(), 55);
     }
@@ -306,14 +406,27 @@ mod tests {
         started_rx.await.unwrap();
         let before = WRITE_EPOCH.load(Ordering::Acquire);
         let write_value = value.clone();
-        let write = tokio::spawn(dispatch(move || { write_value.store(20, Ordering::SeqCst); Ok(()) }));
-        while WRITE_EPOCH.load(Ordering::Acquire) == before { tokio::task::yield_now().await; }
+        let write = tokio::spawn(dispatch(move || {
+            write_value.store(20, Ordering::SeqCst);
+            Ok(())
+        }));
+        while WRITE_EPOCH.load(Ordering::Acquire) == before {
+            tokio::task::yield_now().await;
+        }
         let expected_epoch = WRITE_EPOCH.load(Ordering::Acquire);
         let read_value = value.clone();
         let new = tokio::spawn(read_current(move || Ok(read_value.load(Ordering::SeqCst))));
         loop {
-            let epoch = READ_FLIGHT.get().unwrap().lock().await.as_ref().map(|f| f.epoch);
-            if epoch == Some(expected_epoch) { break; }
+            let epoch = READ_FLIGHT
+                .get()
+                .unwrap()
+                .lock()
+                .await
+                .as_ref()
+                .map(|f| f.epoch);
+            if epoch == Some(expected_epoch) {
+                break;
+            }
             tokio::task::yield_now().await;
         }
         release_tx.send(()).unwrap();
