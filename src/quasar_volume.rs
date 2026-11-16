@@ -93,8 +93,6 @@ fn verified_build(build: &str, compatible: &[u8]) -> bool {
         // entry exactly so a look-alike name cannot select the backend. On
         // this build the native VolumeSet ACK was verified end to end:
         // stereo_pair reported 20%, VolumeSet 60% was acknowledged and maind
-                // verified end to end:
-        // stereo_pair reported 20%, VolumeSet 60% was acknowledged and maind
         // mirrored the new level to ALSA Master.
         "0.369.1.46.4778262442.20261013.297" => compatible
             .split(' ')
@@ -427,7 +425,10 @@ mod tests {
             &b"prefix-yandex,bergamot\0"[..],
             &b"yandex,bergamot-suffix\0"[..],
         ] {
-            assert!(!verified_build("0.369.1.50.4794652521.20261021.117", board));
+            assert!(!verified_build(
+                "0.369.1.50.4794652521.20261021.117",
+                board
+            ));
         }
         assert!(!verified_build("", b"yandex,bergamot\0"));
     }
@@ -540,14 +541,26 @@ mod tests {
             ("0.369.1.50.4795647582.20261021.133", "yandex,plum-evt2"),
             ("0.369.1.50.4794654278.20261021.133", "yandex,prune-evt2"),
             ("0.369.1.46.4778262955.20261013.160", "yandex,cucumber"),
-            ("0.369.1.46.4778262442.20261013.297", "yandex,station-micro"),
-            ("0.369.1.50.4794663100.20261021.160", "yandex,cucumber-dvt2"),
-            ("0.369.1.50.4794663100.20261021.160", "yandex,cucumber"),
+            (
+                "0.369.1.46.4778262442.20261013.297",
+                "yandex,station-micro",
+            ),
+            (
+                "0.369.1.50.4794663100.20261021.160",
+                "yandex,cucumber-dvt2",
+            ),
+            (
+                "0.369.1.50.4794663100.20261021.160",
+                "yandex,cucumber",
+            ),
         ] {
             assert!(verified_build(build, board.as_bytes()));
             assert!(!verified_build(build, b"unqualified-board\0"));
         }
-        assert!(verified_build("1.266.4.40.2633723173.20241021", b""));
+        assert!(verified_build(
+            "1.266.4.40.2633723173.20241021",
+            b""
+        ));
     }
 
     /// Independently transcribed schema fixture from the reference helper:
