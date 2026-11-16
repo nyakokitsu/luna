@@ -35,3 +35,16 @@ jobs:
 
       - name: cargo test
         run: cargo test --workspace --locked
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Installer station detection
+        run: python3 tests/install_detection.py
+
+      - name: Read-only installation
+        run: python3 tests/readonly_install.py
+
+      - name: Media providers over HTTP
+        run: python3 tests/media_provider_http.py target/debug/luna
