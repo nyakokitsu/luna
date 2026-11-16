@@ -48,3 +48,27 @@ jobs:
 
       - name: Media providers over HTTP
         run: python3 tests/media_provider_http.py target/debug/luna
+
+  web:
+    name: Web UI syntax
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # The pages keep their code in inline <script> blocks; extract it and
+      # let Node parse it without running anything.
+      - name: node --check
+        run: |
+          for page in web/*.html; do
+            python3 - "$page" <<'PY' | node --check
+          import re, sys
+          text = open(sys.argv[1], encoding="utf-8").read()
+          print("\n;\n".join(re.findall(r"<script>(.*?)</script>", text, re.S)))
+          PY
+            echo "ok $page"
+          done
