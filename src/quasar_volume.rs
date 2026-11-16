@@ -93,10 +93,12 @@ fn verified_build(build: &str, compatible: &[u8]) -> bool {
         // entry exactly so a look-alike name cannot select the backend. On
         // this build the native VolumeSet ACK was verified end to end:
         // stereo_pair reported 20%, VolumeSet 60% was acknowledged and maind
+                // verified end to end:
+        // stereo_pair reported 20%, VolumeSet 60% was acknowledged and maind
         // mirrored the new level to ALSA Master.
-        "0.369.1.46.4778262442.20261013.297" => {
-            compatible.split(' ').any(|entry| entry == "yandex,station-micro")
-        }
+        "0.369.1.46.4778262442.20261013.297" => compatible
+            .split(' ')
+            .any(|entry| entry == "yandex,station-micro"),
         "0.369.1.50.4794663100.20261021.160" => {
             has("yandex,cucumber-dvt2") || has("yandex,cucumber")
         }
