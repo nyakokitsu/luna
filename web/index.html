@@ -1,1033 +1,847 @@
 <!doctype html>
 <html lang="ru">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Luna API</title>
-  <style>
-    :root { color-scheme: dark; --bg:#0d1117; --panel:#161d27; --line:#2a3645; --text:#e6edf3; --muted:#8b98a8; --accent:#62a0ff; --ok:#62d394; --bad:#ff7b72; }
-    * { box-sizing:border-box; }
-    body { max-width:1320px; margin:0 auto; padding:24px 18px 60px; font:14px/1.5 system-ui,sans-serif; background:radial-gradient(circle at 85% -10%,#193a65 0,#0d1117 38%); color:var(--text); }
-    h1 { margin:0 0 5px; font-size:32px; letter-spacing:-.04em; background:linear-gradient(100deg,#fff,#8dbbff); -webkit-background-clip:text; background-clip:text; color:transparent; } h2 { margin:0 0 14px; font-size:19px; letter-spacing:-.02em; }
-    h3 { margin:22px 0 10px; font-size:15px; color:#b7c5d6; }
-    p { color:var(--muted); } section { margin:16px 0; padding:20px; background:rgba(22,29,39,.92); border:1px solid var(--line); border-radius:14px; box-shadow:0 12px 35px rgba(0,0,0,.16); }
-    button, input, textarea { border:1px solid var(--line); border-radius:7px; background:#0f151d; color:var(--text); padding:8px 10px; font:inherit; }
-    button { cursor:pointer; background:linear-gradient(180deg,#2867ad,#1e4d85); border-color:#3478c8; box-shadow:0 3px 10px rgba(0,0,0,.18); } button:hover { background:#3478c8; transform:translateY(-1px); }
-    button.secondary { background:#202b38; border-color:var(--line); } button.danger { background:#632b32; border-color:#9e414b; }
-    button:disabled { opacity:.5; cursor:not-allowed; } textarea { width:100%; min-height:58px; resize:vertical; font:12px ui-monospace,monospace; }
-    code, .method { color:#9cc4ff; font-family:ui-monospace,monospace; } .hint { color:var(--muted); font-size:12px; }
-    .device-head { display:flex; gap:12px; align-items:center; justify-content:space-between; flex-wrap:wrap; }
-    .device-info { white-space:pre-wrap; color:#b8c7d9; margin:10px 0 0; }
-    .settings-actions { display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; }
-    .settings-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:10px 18px; }
-    .setting { display:flex; gap:8px; align-items:center; min-height:34px; }
-    .setting input[type="number"], .setting input[type="text"] { width:100%; }
-    .settings-group { margin:14px 0 0; padding:12px; border:1px solid var(--line); border-radius:8px; }
-    .endpoint { display:grid; grid-template-columns:minmax(280px,1fr) minmax(260px,1.2fr) minmax(260px,1.4fr) auto; gap:10px; align-items:start; padding:13px 10px; margin:0 -10px; border-top:1px solid var(--line); transition:background .15s; }
-    .endpoint:hover { background:rgba(98,160,255,.045); }
-    .endpoint:first-of-type { border-top:0; } .endpoint-title { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-    .method { font-weight:700; color:#d6a7ff; } .path { width:100%; margin-top:7px; }
-    .body { min-height:68px; } .response { min-height:68px; max-height:220px; overflow:auto; margin:0; padding:9px; background:#0a0f15; border:1px solid var(--line); border-radius:7px; white-space:pre-wrap; word-break:break-word; color:#b7c5d6; }
-    .response.ok { color:var(--ok); } .response.bad { color:var(--bad); }
-    .test-running { border-color:var(--accent); }
-    .hero { display:flex; gap:18px; align-items:flex-end; justify-content:space-between; margin-bottom:18px; }
-    .hero-copy { max-width:760px; }
-    .hero-actions { display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end; }
-    .hero-actions button { min-height:38px; }
-    .section-nav { position:sticky; top:10px; z-index:10; display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin:12px 0 18px; padding:7px; background:rgba(13,17,23,.88); border:1px solid var(--line); border-radius:12px; backdrop-filter:blur(14px); box-shadow:0 10px 28px rgba(0,0,0,.22); }
-    .section-nav a { color:#b7c9e2; text-decoration:none; padding:7px 11px; border-radius:8px; }
-    .section-nav a:hover { color:#fff; background:#214d80; }
-    .section-nav .nav-spacer { flex:1; }
-    .web-tabs { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:0 0 12px; padding:6px; background:rgba(22,29,39,.8); border:1px solid var(--line); border-radius:10px; }
-    .web-tabs button { padding:7px 13px; background:transparent; border-color:transparent; box-shadow:none; }
-    .web-tabs button:hover, .web-tabs button.active { background:#214d80; border-color:#3478c8; transform:none; }
-    .web-tabs .tab-plugin { background:#202b38; }
-    .custom-web-panel { display:none; padding:0; overflow:hidden; min-height:720px; }
-    .custom-web-panel iframe { display:block; width:100%; height:720px; border:0; background:#0d1117; }
-    .custom-web-empty { padding:28px; color:var(--muted); }
-    .endpoint button { white-space:nowrap; } .upload-row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
-    .endpoint-toolbar { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:0 0 16px; padding:10px; background:#101720; border:1px solid var(--line); border-radius:10px; }
-    .endpoint-toolbar input { min-width:220px; flex:1; }
-    .endpoint-tabs { display:flex; gap:6px; flex-wrap:wrap; }
-    .endpoint-tabs button { padding:6px 10px; background:#202b38; border-color:var(--line); box-shadow:none; }
-    .endpoint-tabs button.active { background:#2867ad; border-color:#62a0ff; }
-    .endpoint.is-hidden, .endpoint-category.is-hidden { display:none; }
-    .empty-filter { display:none; padding:18px 10px; color:var(--muted); }
-    @media (max-width:900px) { .hero { align-items:flex-start; flex-direction:column; } .hero-actions { justify-content:flex-start; } .endpoint { grid-template-columns:1fr; } .endpoint button { width:max-content; } .section-nav { position:static; } }
-  </style>
-  <style>
-    /* Material 3 Expressive layer */
-    :root {
-      color-scheme: dark;
-      --bg: #17140d;
-      --panel: #242016;
-      --panel-high: #302a1d;
-      --panel-low: #1e1b13;
-      --line: #625a47;
-      --text: #f1e9d8;
-      --muted: #d0c6b2;
-      --accent: #ffd166;
-      --accent-strong: #ffe8a3;
-      --accent-container: #705b00;
-      --on-accent: #3b2f00;
-      --secondary-container: #514b3b;
-      --tertiary: #ffb86b;
-      --ok: #b6f397;
-      --bad: #ffb4ab;
-      --shadow: 0 18px 50px rgba(0, 0, 0, .28);
-    }
-    html { scroll-behavior: smooth; }
-    @keyframes luna-page-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-    @keyframes luna-card-in { from { opacity: 0; transform: translateY(8px) scale(.992); } to { opacity: 1; transform: translateY(0) scale(1); } }
-    @keyframes luna-glow { 0%, 100% { box-shadow: 0 0 0 0 rgba(255,209,102,0); } 50% { box-shadow: 0 0 0 4px rgba(255,209,102,.1); } }
-    body {
-      position: relative;
-      isolation: isolate;
-      max-width: 1440px;
-      padding: 28px 24px 80px;
-      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      letter-spacing: .01em;
-      background: var(--bg);
-      animation: luna-page-in .45s ease-out both;
-    }
-    body::before, body::after {
-      position: fixed;
-      z-index: -1;
-      width: 34vw;
-      height: 34vw;
-      min-width: 280px;
-      min-height: 280px;
-      border-radius: 45% 55% 65% 35%;
-      content: "";
-      filter: blur(4px);
-      opacity: .22;
-      pointer-events: none;
-    }
-    body::before { top: -15vw; right: -8vw; background: #a47700; transform: rotate(18deg); }
-    body::after { bottom: -20vw; left: -15vw; background: #a84f1b; transform: rotate(-22deg); }
-    h1 {
-      margin: 3px 0 8px;
-      font-size: clamp(42px, 6vw, 72px);
-      line-height: .98;
-      letter-spacing: -.065em;
-      background: linear-gradient(115deg, #fff8df 10%, var(--accent) 52%, var(--tertiary) 105%);
-      -webkit-background-clip: text;
-      background-clip: text;
-      color: transparent;
-    }
-    h2 { margin-bottom: 16px; font-size: 24px; letter-spacing: -.035em; }
-    h3 { margin: 28px 0 12px; font-size: 15px; color: var(--accent); letter-spacing: .025em; }
-    p { color: var(--muted); }
-    section {
-      position: relative;
-      margin: 18px 0;
-      padding: 24px;
-      background: color-mix(in srgb, var(--panel) 94%, transparent);
-      border: 1px solid color-mix(in srgb, var(--line) 74%, transparent);
-      border-radius: 30px 22px 30px 22px;
-      box-shadow: var(--shadow);
-      backdrop-filter: blur(18px);
-      animation: luna-card-in .46s cubic-bezier(.2,.8,.2,1) both;
-      transition: border-color .24s ease, background .24s ease, box-shadow .24s ease, transform .24s ease;
-    }
-    section:nth-of-type(2) { animation-delay: .04s; }
-    section:nth-of-type(3) { animation-delay: .08s; }
-    section:nth-of-type(4) { animation-delay: .12s; }
-    section:nth-of-type(5) { animation-delay: .16s; }
-    section:nth-of-type(6) { animation-delay: .20s; }
-    section:hover { border-color: color-mix(in srgb, var(--accent) 42%, var(--line)); transform: translateY(-2px); }
-    button, input, textarea {
-      border: 1px solid var(--line);
-      border-radius: 18px;
-      background: var(--panel-low);
-      color: var(--text);
-      padding: 10px 15px;
-      font: inherit;
-      outline: none;
-      transition: border-color .22s ease, background .22s ease, transform .22s cubic-bezier(.2,.8,.2,1), box-shadow .22s ease, color .22s ease;
-    }
-    button {
-      min-height: 42px;
-      cursor: pointer;
-      background: var(--accent-container);
-      border-color: transparent;
-      color: var(--accent-strong);
-      font-weight: 700;
-      letter-spacing: .01em;
-      box-shadow: none;
-    }
-    button:hover { background: #9b7b00; transform: translateY(-2px); box-shadow: 0 8px 18px rgba(0,0,0,.22); }
-    button:active { transform: translateY(0) scale(.98); }
-    button.secondary, .endpoint-tabs button { background: var(--secondary-container); border-color: transparent; color: var(--text); }
-    button.danger { background: #633b43; color: var(--bad); }
-    button:disabled { opacity: .45; transform: none; box-shadow: none; }
-    input:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(255,209,102,.18); }
-    textarea { border-radius: 20px; }
-    code, .method { color: var(--accent); }
-    .hint { color: var(--muted); }
-    .hero { align-items: center; min-height: 190px; padding: 12px 8px 22px; }
-    .hero-copy { max-width: 800px; }
-    .hero-copy::before { display: block; margin-bottom: 13px; color: var(--tertiary); content: "LUNA  /  DEVICE RUNTIME"; font-size: 11px; font-weight: 800; letter-spacing: .18em; }
-    .hero-actions button:first-child { min-width: 145px; }
-    .section-nav, .web-tabs {
-      gap: 7px;
-      padding: 8px;
-      background: color-mix(in srgb, var(--panel) 86%, transparent);
-      border: 1px solid var(--line);
-      border-radius: 24px 16px 24px 16px;
-      box-shadow: 0 12px 30px rgba(0,0,0,.18);
-    }
-    .section-nav { top: 12px; }
-    .section-nav a, .web-tabs button { border-radius: 16px; color: var(--muted); font-weight: 650; transition: background .22s ease, color .22s ease, transform .22s ease; }
-    .section-nav a:hover, .web-tabs button:hover, .web-tabs button.active { background: var(--accent-container); border-color: transparent; color: var(--accent-strong); }
-    .device-head { gap: 18px; }
-    .response { min-height: 76px; margin-top: 14px; padding: 14px; background: #1d1a12; border-color: var(--line); border-radius: 20px 14px 20px 14px; color: var(--muted); transition: color .22s ease, border-color .22s ease, background .22s ease; }
-    .response.ok { color: var(--ok); }
-    .response.bad { color: var(--bad); }
-    .settings-group, .endpoint-toolbar { background: var(--panel-low); border-color: var(--line); border-radius: 22px 14px 22px 14px; }
-    .setting { min-height: 40px; }
-    input[type="checkbox"] { accent-color: var(--accent-container); width: 18px; height: 18px; }
-    .endpoint {
-      margin: 10px 0 0;
-      padding: 16px;
-      background: color-mix(in srgb, var(--panel-high) 78%, transparent);
-      border: 1px solid transparent;
-      border-radius: 22px 14px 22px 14px;
-      box-shadow: none;
-      animation: luna-card-in .34s ease-out both;
-      transition: background .22s ease, border-color .22s ease, transform .22s ease, box-shadow .22s ease;
-    }
-    .endpoint:first-of-type { border-top: 1px solid transparent; }
-    .endpoint:hover { background: #3a3220; border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); transform: translateY(-2px); box-shadow: 0 8px 22px rgba(0,0,0,.16); }
-    .endpoint-title { min-height: 26px; }
-    .method { padding: 4px 9px; border-radius: 9px; background: rgba(255,209,102,.14); font-size: 11px; letter-spacing: .08em; }
-    .path { margin-top: 9px; background: var(--panel-low); }
-    .endpoint button { align-self: end; }
-    .endpoint-toolbar { gap: 14px; padding: 12px; }
-    .endpoint-tabs { gap: 7px; }
-    .endpoint-tabs button { min-height: 36px; padding: 7px 13px; font-size: 12px; }
-    .endpoint-tabs button.active { background: var(--accent-container); color: var(--accent-strong); }
-    .endpoint-tabs button { transition: background .22s ease, color .22s ease, transform .22s ease; }
-    .endpoint-tabs button:hover { transform: translateY(-1px); }
-    .custom-web-panel { border-radius: 30px 22px 30px 22px; }
-    .custom-web-panel iframe { border-radius: 22px; }
-    .upload-row { gap: 10px; margin-top: 14px; }
-    #room-response { margin-top: 14px; }
-    body.light-theme {
-      --bg: #fff9ed;
-      --panel: #fffdf7;
-      --panel-high: #f5efdf;
-      --panel-low: #f0eadc;
-      --line: #7b7668;
-      --text: #211f18;
-      --muted: #5f5a4f;
-      --accent: #725d00;
-      --accent-strong: #4e4000;
-      --accent-container: #f8d75f;
-      --on-accent: #3b2f00;
-      --secondary-container: #e7dfcc;
-      --tertiary: #9a4f00;
-      --shadow: 0 18px 45px rgba(85,67,20,.14);
-      color-scheme: light;
-      background: var(--bg);
-    }
-    body.light-theme::before { background: #f4c949; opacity: .18; }
-    body.light-theme::after { background: #e58b4a; opacity: .12; }
-    body.light-theme .response { background: #fffdf7; }
-    body.light-theme .method { background: rgba(114,93,0,.12); }
-    body.light-theme .endpoint:hover { background: #ece5d5; }
-    @media (prefers-reduced-motion: reduce) {
-      *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: .01ms !important; }
-    }
-    @media (max-width: 900px) {
-      body { padding: 18px 12px 52px; }
-      section { padding: 18px; border-radius: 24px 16px 24px 16px; }
-      .hero { min-height: 0; padding: 10px 4px 16px; }
-      .hero-actions { width: 100%; justify-content: stretch; }
-      .hero-actions button { flex: 1; }
-    }
-  </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Luna</title>
+<script>(function(){var t;try{t=localStorage.getItem('luna-theme')}catch(e){}document.documentElement.dataset.theme=t||(matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light')})()</script>
+<style>
+*{box-sizing:border-box}
+:root{--serif:ui-serif,"New York","Iowan Old Style",Georgia,serif;--sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;--mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;--ease:cubic-bezier(.2,.8,.2,1);
+--bg:#faf9f5;--side:#f3f1ea;--surf:#fff;--surf2:#f1efe7;--line:#e4e1d6;--text:#1f1e1d;--mut:#6f6d65;--acc:#c4623f;--acc-h:#ad5232;--acc-t:#fff;--acc-s:rgba(196,98,63,.12);--ok:#3d7a4c;--bad:#b3402f;--warn:#96690f}
+html[data-theme=dark]{color-scheme:dark;--bg:#1f1e1d;--side:#262523;--surf:#2b2a28;--surf2:#34322f;--line:#3d3b37;--text:#f0eee6;--mut:#a29f94;--acc:#d9784f;--acc-h:#e68b63;--acc-t:#1f1e1d;--acc-s:rgba(217,120,79,.16);--ok:#8fcf9d;--bad:#f09a8c;--warn:#e3b85c}
+html[data-theme=light]{color-scheme:light}
+html{scroll-behavior:smooth}
+body{margin:0;font:15px/1.55 var(--sans);background:var(--bg);color:var(--text);-webkit-font-smoothing:antialiased}
+.i{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.app{display:grid;grid-template-columns:264px minmax(0,1fr);min-height:100vh}
+aside{position:sticky;top:0;height:100vh;display:flex;flex-direction:column;gap:2px;padding:16px 12px;background:var(--side);border-right:1px solid var(--line);overflow:auto}
+.brand{display:flex;align-items:center;gap:10px;padding:4px 10px 18px;font:500 22px var(--serif)}
+.brand svg{width:26px;height:26px}
+.nv{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:9px;color:var(--text);text-decoration:none;font-weight:500;transition:background .15s,color .15s}
+.nv:hover{background:var(--surf2)}.nv.on{background:var(--surf2);color:var(--acc)}
+.nv .i{color:var(--mut);transition:color .15s}.nv.on .i{color:var(--acc)}
+.grp{margin:18px 10px 6px;font-size:12px;color:var(--mut)}
+.sp{flex:1}
+.top{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:10px;padding:14px 28px;background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(12px)}
+.top h1{margin:0;font:500 26px/1.2 var(--serif);letter-spacing:-.01em}
+#menu{display:none}
+.pill{display:inline-flex;align-items:center;gap:7px;padding:4px 11px;border:1px solid var(--line);border-radius:99px;font-size:13px;color:var(--mut);background:var(--surf)}
+.pill::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--mut);transition:background .3s}
+.pill.ok::before{background:var(--ok)}.pill.bad::before{background:var(--bad)}
+.wrap{max-width:920px;margin:0 auto;padding:6px 28px 110px}
+.view{display:none}.view.on{display:block;animation:vin .28s var(--ease)}
+@keyframes vin{from{opacity:0;transform:translateY(8px)}}
+.card{background:var(--surf);border:1px solid var(--line);border-radius:16px;padding:24px;margin:0 0 18px}
+.card h3,.h{margin:0 0 4px;font:500 18px var(--serif)}
+.mut{color:var(--mut);font-size:14px;margin:0}
+.row{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:36px;padding:7px 14px;font:inherit;font-weight:500;color:var(--text);background:var(--surf);border:1px solid var(--line);border-radius:10px;cursor:pointer;transition:background .15s,transform .12s,border-color .15s}
+.btn:hover{background:var(--surf2)}.btn:active{transform:scale(.97)}
+.btn.pri{background:var(--acc);color:var(--acc-t);border-color:transparent}.btn.pri:hover{background:var(--acc-h)}
+.btn.dng{color:var(--bad)}.btn.sq{width:36px;padding:0}
+.btn:disabled{opacity:.45;pointer-events:none}
+:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+.in{width:100%;font:inherit;padding:9px 12px;color:inherit;background:var(--bg);border:1px solid var(--line);border-radius:10px;transition:border-color .15s,box-shadow .15s}
+.in:focus{outline:0;border-color:var(--acc);box-shadow:0 0 0 3px var(--acc-s)}
+select.in{cursor:pointer}
+textarea.in{font:13px/1.5 var(--mono);resize:vertical;min-height:64px}
+.fld{display:grid;gap:6px;font-size:13px;color:var(--mut)}
+.fld code.key-tag{font:600 12.5px var(--mono);color:var(--text);background:var(--surf2);padding:1px 6px;border-radius:5px;width:fit-content}
+.g2{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px;margin-top:14px}
+.sw{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:11px 0;border-bottom:1px solid var(--line);cursor:pointer}
+.sw:last-child{border-bottom:0}
+.sw input,.tg-input{appearance:none;position:relative;flex:none;width:40px;height:22px;margin:0;border-radius:99px;background:var(--line);cursor:pointer;transition:background .2s;border:0}
+.sw input::after,.tg-input::after{content:"";position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:#fff;transition:transform .22s var(--ease);box-shadow:0 1px 2px rgba(0,0,0,.2)}
+.sw input:checked,.tg-input:checked{background:var(--acc)}.sw input:checked::after,.tg-input:checked::after{transform:translateX(18px)}
+.sw small{margin-left:6px;color:var(--warn);font-size:12px}
+.pg{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));column-gap:28px}
+
+/* Hero / Увеличенный LED визуализатор */
+.hero{display:grid;grid-template-columns:250px 1fr;gap:32px;align-items:center;padding:28px}
+#ring{width:250px;height:250px;display:block}
+.seg{fill:var(--surf2);stroke:var(--line);stroke-width:1;transition:fill .4s,filter .4s,stroke .4s;transform-box:fill-box;transform-origin:center;animation:lit .5s var(--ease) both;animation-delay:calc(var(--i)*45ms)}
+@keyframes lit{from{opacity:0;transform:scale(.4)}}
+#logo{fill:var(--surf2);stroke:var(--line);stroke-width:1.2;transition:fill .4s,filter .4s,stroke .4s}
+.logo-seg{fill:var(--surf2);stroke:var(--line);stroke-width:1;transition:fill .4s,filter .4s,stroke .4s}
+
+.sws{display:flex;gap:9px;flex-wrap:wrap;margin:16px 0}
+.sc{width:32px;height:32px;border-radius:50%;border:2px solid var(--surf);box-shadow:0 0 0 1px var(--line);cursor:pointer;padding:0;transition:transform .15s var(--ease),box-shadow .15s}
+.sc:hover{transform:scale(1.12)}.sc.on{box-shadow:0 0 0 2px var(--acc)}
+.sc.c{display:grid;place-items:center;background:conic-gradient(#f44,#fc4,#4c6,#4cf,#a5f,#f44);overflow:hidden;position:relative}
+.sc.c input{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%}
+.seg-c{display:inline-flex;padding:3px;gap:2px;background:var(--surf2);border-radius:11px}
+.seg-c button{font:inherit;font-weight:500;padding:5px 13px;border:0;border-radius:8px;background:transparent;color:var(--mut);cursor:pointer;transition:background .15s,color .15s}
+.seg-c button.on{background:var(--surf);color:var(--text);box-shadow:0 1px 2px rgba(0,0,0,.12)}
+.kv{display:grid;grid-template-columns:minmax(90px,max-content) 1fr;gap:6px 18px;margin:14px 0 0;font-size:14px}
+.kv dt{color:var(--mut);font-family:var(--mono);font-size:13px}.kv dd{margin:0;overflow-wrap:anywhere}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}
+.chip{padding:4px 11px;border-radius:99px;background:var(--surf2);font-size:12.5px;color:var(--mut);border:0;font-family:inherit}
+button.chip{cursor:pointer;font-weight:500;transition:background .15s,color .15s}
+button.chip.on{background:var(--acc-s);color:var(--acc)}
+details{margin-top:14px}summary{cursor:pointer;color:var(--mut);font-size:13px}
+pre{margin:8px 0 0;padding:12px 14px;max-height:300px;overflow:auto;background:var(--bg);border:1px solid var(--line);border-radius:10px;font:12.5px/1.55 var(--mono);white-space:pre-wrap;word-break:break-word;color:var(--mut)}
+pre.ok{color:var(--ok)}pre.bad{color:var(--bad)}
+.busy{opacity:.55;transition:opacity .2s}
+.log{list-style:none;margin:14px 0 0;padding:0;max-height:480px;overflow:auto;font:13px/1.5 var(--mono)}
+.log li{display:flex;gap:12px;padding:5px 0;border-bottom:1px solid var(--line)}
+.log time{color:var(--mut);flex:none}.log .ok span{color:var(--ok)}.log .bad span{color:var(--bad)}.log .skip span,.log .wait span{color:var(--warn)}.log .req span{color:var(--text)}
+.log .empty{color:var(--mut);font:14px var(--sans);border:0;padding:18px 0}
+.bar{height:3px;margin-top:16px;border-radius:3px;background:var(--surf2);overflow:hidden;opacity:0;transition:opacity .2s}
+.bar.on{opacity:1}.bar::after{content:"";display:block;width:35%;height:100%;background:var(--acc);border-radius:3px;animation:slide 1.1s ease-in-out infinite}
+@keyframes slide{from{transform:translateX(-100%)}to{transform:translateX(300%)}}
+
+/* Endpoints */
+.tools{position:sticky;top:62px;z-index:4;padding:10px 0 12px;background:var(--bg)}
+.tools .row{margin-top:10px;justify-content:flex-start}
+.ep{border:1px solid var(--line);border-radius:13px;background:var(--surf);margin-bottom:8px;transition:border-color .15s}
+.ep:hover,.ep.open{border-color:color-mix(in srgb,var(--acc) 45%,var(--line))}
+.ep-h{display:flex;width:100%;align-items:center;gap:12px;padding:11px 14px;font:inherit;color:inherit;background:none;border:0;cursor:pointer;text-align:left}
+.ep-h code{flex:1;font:13.5px var(--mono);overflow-wrap:anywhere}
+.ep-h .i{color:var(--mut);transition:transform .25s var(--ease)}.ep.open .ep-h .i{transform:rotate(90deg)}
+.ep-b{display:grid;grid-template-rows:0fr;visibility:hidden;transition:grid-template-rows .26s var(--ease),visibility 0s .26s}
+.ep.open .ep-b{grid-template-rows:1fr;visibility:visible;transition:grid-template-rows .26s var(--ease)}
+.ep-i{min-height:0;overflow:hidden}.ep-i>div{display:grid;gap:12px;padding:4px 16px 16px}
+.m{min-width:56px;padding:2px 0;border-radius:6px;text-align:center;font:600 11px/1.6 var(--mono);background:var(--surf2);color:var(--mut)}
+.m.GET{background:color-mix(in srgb,var(--ok) 16%,transparent);color:var(--ok)}.m.POST{background:var(--acc-s);color:var(--acc)}
+.m.PUT{background:color-mix(in srgb,var(--warn) 16%,transparent);color:var(--warn)}.m.DELETE{background:color-mix(in srgb,var(--bad) 16%,transparent);color:var(--bad)}
+.st{font:12px var(--mono);color:var(--mut)}.ok{color:var(--ok)}.bad{color:var(--bad)}
+.hid{display:none}.cat{margin:22px 0 10px;font:500 17px var(--serif)}
+.toggle-row{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:var(--bg);border:1px solid var(--line);border-radius:10px;cursor:pointer}
+.toggle-row .lbl{display:flex;align-items:center;gap:8px;font-size:13.5px}
+.toggle-state{font:500 12.5px var(--mono);color:var(--mut)}
+.path-preview{font:12.5px var(--mono);color:var(--mut);padding:6px 10px;background:var(--bg);border:1px solid var(--line);border-radius:8px}
+.path-preview b{color:var(--text);font-weight:500}
+
+#frame{display:block;width:100%;height:calc(100vh - 130px);min-height:480px;border:1px solid var(--line);border-radius:16px;background:var(--surf)}
+#v-plugin{max-width:none}
+#sv{position:sticky;bottom:18px;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 12px 10px 18px;margin-top:8px;background:var(--text);color:var(--bg);border-radius:14px;box-shadow:0 10px 30px rgba(0,0,0,.25);opacity:0;transform:translateY(140%);pointer-events:none;transition:transform .3s var(--ease),opacity .2s}
+#sv.show{opacity:1;transform:none;pointer-events:auto}
+#sv .btn{min-height:32px}#sv .btn:not(.pri){background:transparent;color:var(--bg);border-color:color-mix(in srgb,var(--bg) 35%,transparent)}
+#toasts{position:fixed;z-index:50;left:50%;bottom:84px;display:grid;gap:8px;transform:translateX(-50%);pointer-events:none}
+.toast{padding:9px 16px;border-radius:11px;background:var(--text);color:var(--bg);font-size:14px;box-shadow:0 8px 24px rgba(0,0,0,.22);animation:tin .3s var(--ease)}
+.toast.bad{background:var(--bad);color:#fff}.toast.out{opacity:0;transform:translateY(6px);transition:.25s}
+@keyframes tin{from{opacity:0;transform:translateY(10px)}}
+#scrim{display:none}
+@media(max-width:900px){
+.app{grid-template-columns:1fr}
+aside{position:fixed;z-index:30;left:0;top:0;width:272px;transform:translateX(-102%);transition:transform .3s var(--ease)}
+.app.open aside{transform:none;box-shadow:0 0 40px rgba(0,0,0,.3)}
+#scrim{display:block;position:fixed;inset:0;z-index:20;background:rgba(0,0,0,.4);opacity:0;pointer-events:none;transition:opacity .3s}
+.app.open #scrim{opacity:1;pointer-events:auto}
+#menu{display:inline-flex}.top{padding:12px 16px}.top h1{font-size:22px}.wrap{padding:4px 16px 110px}
+.hero{grid-template-columns:1fr;justify-items:center;text-align:center}.hero .sws,.hero .row{justify-content:center}
+.tools{top:58px}.pill span{display:none}}
+@media(prefers-reduced-motion:reduce){*,::before,::after{animation-duration:.01ms!important;animation-delay:0s!important;transition-duration:.01ms!important;scroll-behavior:auto!important}}
+</style>
 </head>
 <body>
-  <div class="hero">
-    <div class="hero-copy">
-      <h1>Luna API</h1>
-      <p>Управление станцией и проверка capabilities без curl. Выберите раздел или найдите endpoint по пути.</p>
+<svg width="0" height="0" style="position:absolute"><defs>
+<symbol id="i-home" viewBox="0 0 24 24"><path d="M3 11l9-8 9 8M5 10v10h14V10"/></symbol>
+<symbol id="i-pulse" viewBox="0 0 24 24"><path d="M3 12h4l3-8 4 16 3-8h4"/></symbol>
+<symbol id="i-set" viewBox="0 0 24 24"><path d="M4 7h9m4 0h3M4 17h3m4 0h9M15 5v4M9 15v4"/></symbol>
+<symbol id="i-code" viewBox="0 0 24 24"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5"/></symbol>
+<symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5M17.5 17.5L19 19M5 19l1.5-1.5M17.5 6.5L19 5"/></symbol>
+<symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14A8 8 0 1 1 10 4a6 6 0 0 0 10 10z"/></symbol>
+<symbol id="i-ref" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></symbol>
+<symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
+<symbol id="i-plug" viewBox="0 0 24 24"><path d="M9 3v5M15 3v5M6 8h12v3a6 6 0 0 1-12 0zM12 17v4"/></symbol>
+<symbol id="i-chev" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></symbol>
+</defs></svg>
+<div class="app" id="app">
+<aside>
+  <div class="brand"><svg viewBox="0 0 26 26"><g fill="var(--acc)"><circle cx="13" cy="4" r="2.4"/><circle cx="21.2" cy="8.5" r="2.4" opacity=".8"/><circle cx="21.2" cy="17.5" r="2.4" opacity=".6"/><circle cx="13" cy="22" r="2.4" opacity=".45"/><circle cx="4.8" cy="17.5" r="2.4" opacity=".3"/><circle cx="4.8" cy="8.5" r="2.4" opacity=".2"/></g></svg>Luna</div>
+  <a class="nv" data-v="overview" href="#overview"><svg class="i"><use href="#i-home"/></svg>Обзор</a>
+  <a class="nv" data-v="tests" href="#tests"><svg class="i"><use href="#i-pulse"/></svg>Тест API</a>
+  <a class="nv" data-v="settings" href="#settings"><svg class="i"><use href="#i-set"/></svg>Настройки</a>
+  <a class="nv" data-v="endpoints" href="#endpoints"><svg class="i"><use href="#i-code"/></svg>Endpoints</a>
+  <div class="grp" id="pg" hidden>Плагины</div>
+  <div id="plug"></div>
+  <div class="sp"></div>
+</aside>
+<div id="scrim"></div>
+<main>
+  <header class="top">
+    <button class="btn sq" id="menu" aria-label="Меню"><svg class="i"><use href="#i-menu"/></svg></button>
+    <h1 id="title">Обзор</h1><span class="sp"></span>
+    <span class="pill" id="status"><span>Проверяю связь…</span></span>
+    <button class="btn sq" id="refresh" title="Обновить всё" aria-label="Обновить всё"><svg class="i"><use href="#i-ref"/></svg></button>
+    <button class="btn sq" id="theme" aria-label="Переключить тему"></button>
+  </header>
+
+  <div class="wrap view on" id="v-overview">
+    <div class="card hero">
+      <svg id="ring" viewBox="0 0 250 250" role="img" aria-label="Схема LED"></svg>
+      <div>
+        <h2 class="h" style="font-size:26px" id="hname">Станция</h2>
+        <p class="mut" id="led-desc">Цвета, которые вы отправили на LED. Выберите один или несколько.</p>
+        <div class="sws" id="sws"></div>
+        <div class="row" style="justify-content:flex-start">
+          <div class="seg-c" id="tgt"><button class="on" data-t="">Всё</button><button data-t="ring">Кольцо</button><button data-t="logo">Лого</button></div>
+          <button class="btn pri" id="led-on">Включить</button>
+          <button class="btn" id="led-off">Выключить</button>
+        </div>
+      </div>
     </div>
-    <div class="hero-actions">
-      <button onclick="refreshPageData()">Обновить всё</button>
-      <button class="secondary" onclick="location.hash='api-endpoints'">К endpoint’ам</button>
-      <button class="secondary" id="theme-toggle" onclick="toggleTheme()" aria-label="Переключить тему">☀️ Светлая тема</button>
+    <div class="card" id="dev">
+      <div class="row"><div><h3>Устройство</h3><p class="mut">GET /api/device</p></div><button class="btn" id="dev-r">Обновить</button></div>
+      <div id="dev-b"><p class="mut" style="margin-top:14px">Загрузка…</p></div>
+    </div>
+    <div class="card">
+      <h3>Комната</h3><p class="mut">Локальная метка станции. Пустое поле удаляет её.</p>
+      <div class="row" style="margin-top:14px;flex-wrap:nowrap"><input class="in" id="room-input" maxlength="64" placeholder="Например, Кухня"><button class="btn pri" id="room-save">Сохранить</button></div>
     </div>
   </div>
-  <nav class="section-nav" aria-label="Навигация по Luna">
-    <a href="#overview">Обзор</a>
-    <a href="#tests">Тест API</a>
-    <a href="#room">Комната</a>
-    <a href="#settings">Настройки</a>
-    <a href="/calibration">LED-калибровка</a>
-    <a href="#api-endpoints">Endpoints</a>
-    <a href="#install">Установка</a>
-    <span class="nav-spacer"></span>
-    <a href="#web-tabs">Плагины</a>
-  </nav>
-  <nav id="web-tabs" class="web-tabs" aria-label="Разделы Luna">
-    <button class="active" data-tab="luna" onclick="selectWebTab('luna', this)">Luna</button>
-  </nav>
 
-  <section id="custom-web-panel" class="custom-web-panel">
-    <div class="custom-web-empty" id="custom-web-empty">Выберите вкладку плагина</div>
-    <iframe id="custom-web-frame" title="Custom Luna web"></iframe>
-  </section>
+  <div class="wrap view" id="v-tests">
+    <div class="card">
+      <div class="row"><div style="max-width:520px"><h3>Проверка всех функций</h3><p class="mut">Запускает безопасные функции Luna и пишет результат по каждому шагу. Всё, что ждёт действия пользователя или меняет состояние станции, отмечается как пропущенное.</p></div>
+      <div class="row"><button class="btn pri" id="api-test-start">Запустить</button><button class="btn dng" id="api-test-stop" disabled>Остановить</button></div></div>
+      <div class="bar" id="tbar"></div>
+      <div class="chips"><span class="chip ok" id="c-ok">Успешно: 0</span><span class="chip bad" id="c-bad">Ошибки: 0</span><span class="chip" id="c-skip">Пропущено: 0</span><button class="chip" id="t-copy" style="margin-left:auto">Скопировать лог</button></div>
+      <ol class="log" id="tlog"><li class="empty">Тест ещё не запускался</li></ol>
+    </div>
+  </div>
 
-  <section id="overview">
-    <div class="device-head">
-      <div><h2>GET /api/device</h2><div class="hint">Состояние станции и доступные capabilities</div></div>
-      <button onclick="sendDevice()">Обновить device</button>
-    </div>
-    <pre id="device-response" class="response">Запрос ещё не выполнялся</pre>
-  </section>
+  <div class="wrap view" id="v-settings">
+    <div class="card"><h3>Основные</h3>
+      <label class="sw"><span>Разрешить бинарники плагинов</span><input id="setting-binaries" type="checkbox"></label>
+      <label class="sw"><span>Автообновления</span><input id="setting-updates" type="checkbox"></label>
+      <label class="sw"><span>Разрешить user Lua</span><input id="setting-lua-enabled" type="checkbox"></label>
+      <label class="sw"><span>Разрешить бесконечные циклы</span><input id="setting-lua-infinite" type="checkbox"></label>
+      <div class="g2"><label class="fld">Lua лимит, секунд<input class="in" id="setting-lua-runtime" type="number" min="1" max="86400"></label>
+      <label class="fld">Lua share dir<input class="in" id="setting-lua-share"></label></div></div>
+    <div class="card"><h3>LED</h3>
+      <div class="g2"><label class="fld">Профиль<input class="in" id="setting-led-profile"></label>
+      <label class="fld">Количество LED<input class="in" id="setting-led-count" type="number" min="1" max="128"></label>
+      <label class="fld">Sysfs root<input class="in" id="setting-led-root"></label></div></div>
+    <div class="card"><h3>Разрешения для user Lua</h3><div class="pg" id="perms"></div>
+      <div class="g2">
+      <label class="fld">Network allow<input class="in" id="setting-network-allow" placeholder="через запятую"></label>
+      <label class="fld">Input devices<input class="in" id="setting-input-devices" placeholder="через запятую"></label>
+      <label class="fld">IPC services<input class="in" id="setting-ipc-services" placeholder="через запятую"></label>
+      <label class="fld">Command phrases<input class="in" id="setting-command-phrases" placeholder="через запятую"></label></div></div>
+    <div id="sv"><span>Есть несохранённые изменения</span><span class="row" style="gap:8px"><button class="btn" id="s-reset">Отменить</button><button class="btn pri" id="s-save">Сохранить</button></span></div>
+  </div>
 
-  <section id="tests">
-    <div class="device-head">
-      <div><h2>Тест API</h2><div class="hint">Проверяет безопасные функции Luna и пишет результат по каждому шагу. Функции, которые ждут действие пользователя или меняют состояние станции, будут отмечены как пропущенные.</div></div>
-      <div class="settings-actions">
-        <button id="api-test-start" onclick="runApiTest()">Запустить тест всех функций</button>
-        <button id="api-test-stop" class="danger" onclick="stopApiTest()" disabled>Остановить</button>
-      </div>
+  <div class="wrap view" id="v-endpoints">
+    <div class="tools">
+      <input class="in" id="endpoint-search" type="search" placeholder="Поиск: /led, bluetooth, clock…  (клавиша /)" aria-label="Поиск endpoint’ов">
+      <div class="row"><div class="chips" id="endpoint-tabs" style="margin:0"></div></div>
+      <div class="row" style="margin-top:10px"><input class="in" id="runtime-token" type="password" placeholder="X-Luna-Token — для /runtime endpoint’ов" style="max-width:340px"><span class="mut" id="ep-count"></span></div>
     </div>
-    <pre id="api-test-log" class="response" style="min-height:180px;max-height:420px">Тест ещё не запускался</pre>
-  </section>
+    <div id="eps"></div>
+    <p class="mut hid" id="ep-empty" style="padding:24px 0">Ничего не найдено. Попробуйте другой запрос или категорию.</p>
+  </div>
 
-  <section id="room">
-    <h2>Комната</h2>
-    <div class="hint">Локальная метка станции. Пустое поле удаляет её.</div>
-    <div class="upload-row">
-      <input id="room-input" type="text" maxlength="64" placeholder="Например, Кухня">
-      <button onclick="saveRoom()">Сохранить комнату</button>
-      <button class="secondary" onclick="loadRoom()">Обновить</button>
-    </div>
-    <pre id="room-response" class="response">Комната ещё не загружена</pre>
-  </section>
-
-  <section id="settings">
-    <h2>Настройки Luna</h2>
-    <div class="hint">Настройки загружаются через GET и сохраняются через PUT.</div>
-    <div class="settings-group">
-      <h3>Основные</h3>
-      <div class="settings-grid">
-        <label class="setting"><input id="setting-binaries" type="checkbox"> Разрешить бинарники плагинов</label>
-        <label class="setting"><input id="setting-updates" type="checkbox"> Автообновления</label>
-        <label class="setting"><input id="setting-lua-enabled" type="checkbox"> Разрешить user Lua</label>
-        <label class="setting"><input id="setting-lua-infinite" type="checkbox"> Разрешить бесконечные циклы</label>
-        <label class="setting">Lua лимит, секунд <input id="setting-lua-runtime" type="number" min="1" max="86400"></label>
-        <label class="setting">Lua share dir <input id="setting-lua-share" type="text"></label>
-      </div>
-    </div>
-    <div class="settings-group">
-      <h3>LED</h3>
-      <div class="settings-grid">
-        <label class="setting">Профиль <input id="setting-led-profile" type="text"></label>
-        <label class="setting">Количество LED <input id="setting-led-count" type="number" min="1" max="128"></label>
-        <label class="setting">Sysfs root <input id="setting-led-root" type="text"></label>
-      </div>
-    </div>
-    <div class="settings-group">
-      <h3>User Lua permissions</h3>
-      <div class="settings-grid">
-        <label class="setting"><input data-permission="led" type="checkbox"> LED</label>
-        <label class="setting"><input data-permission="volume" type="checkbox"> Громкость</label>
-        <label class="setting"><input data-permission="audio" type="checkbox"> Audio</label>
-        <label class="setting"><input data-permission="microphone" type="checkbox"> Микрофон</label>
-        <label class="setting"><input data-permission="bluetooth" type="checkbox"> Bluetooth</label>
-        <label class="setting"><input data-permission="display" type="checkbox"> Display</label>
-        <label class="setting"><input data-permission="sensors" type="checkbox"> Sensors</label>
-        <label class="setting"><input data-permission="clock" type="checkbox"> Clock</label>
-        <label class="setting"><input data-permission="input" type="checkbox"> Input</label>
-        <label class="setting"><input data-permission="network" type="checkbox"> Network</label>
-        <label class="setting"><input data-permission="ipc_read" type="checkbox"> IPC read</label>
-        <label class="setting"><input data-permission="ipc_control" type="checkbox"> IPC control</label>
-        <label class="setting"><input data-permission="commands" type="checkbox"> Commands</label>
-        <label class="setting"><input data-permission="system" type="checkbox"> System</label>
-        <label class="setting"><input data-permission="exec" type="checkbox"> Exec</label>
-        <label class="setting"><input data-permission="web" type="checkbox"> Custom Web</label>
-      </div>
-      <div class="settings-grid" style="margin-top:10px">
-        <label>Network allow, через запятую<input id="setting-network-allow" type="text"></label>
-        <label>Input devices, через запятую<input id="setting-input-devices" type="text"></label>
-        <label>IPC services, через запятую<input id="setting-ipc-services" type="text"></label>
-        <label>Command phrases, через запятую<input id="setting-command-phrases" type="text"></label>
-      </div>
-    </div>
-    <div class="settings-actions">
-      <button onclick="loadSettings()">GET /api/settings</button>
-      <button onclick="saveSettings()">PUT /api/settings</button>
-    </div>
-    <pre id="settings-response" class="response">Настройки ещё не загружены</pre>
-  </section>
-
-  <section id="api-endpoints">
-    <h2>API endpoints</h2>
-    <div class="endpoint-toolbar">
-      <input id="endpoint-search" type="search" placeholder="Поиск: /led, bluetooth, clock…" aria-label="Поиск endpoint’ов">
-      <div id="endpoint-tabs" class="endpoint-tabs" role="tablist" aria-label="Категории endpoint’ов"></div>
-    </div>
-
-    <h3>Device и sensors</h3>
-    <div class="endpoint" data-method="GET" data-path="/room">
-      <div><div class="endpoint-title"><span class="method">GET</span><code>/api/room</code></div><input class="path" value="/room"></div>
-      <textarea class="body" placeholder="Body не требуется"></textarea><pre class="response">—</pre><button onclick="sendEndpoint(this)">Отправить</button>
-    </div>
-    <div class="endpoint" data-method="PUT" data-path="/room">
-      <div><div class="endpoint-title"><span class="method">PUT</span><code>/api/room</code></div><input class="path" value="/room"></div>
-      <textarea class="body">{"room":"Кухня"}</textarea><pre class="response">—</pre><button onclick="sendEndpoint(this)">Отправить</button>
-    </div>
-    <div class="endpoint" data-method="PUT" data-path="/device">
-      <div><div class="endpoint-title"><span class="method">PUT</span><code>/api/device</code></div><input class="path" value="/device"></div>
-      <textarea class="body">{"model":"yandexmini3","architecture":"aarch64","features":[]}</textarea><pre class="response">—</pre><button onclick="sendEndpoint(this)">Отправить</button>
-    </div>
-    <div class="endpoint" data-method="GET" data-path="/sensors">
-      <div><div class="endpoint-title"><span class="method">GET</span><code>/api/sensors</code></div><input class="path" value="/sensors"></div>
-      <textarea class="body" placeholder="Body не требуется"></textarea><pre class="response">—</pre><button onclick="sendEndpoint(this)">Отправить</button>
-    </div>
-
-    <h3>LED</h3>
-    <div class="endpoint" data-method="POST" data-path="/led">
-      <div><div class="endpoint-title"><span class="method">POST</span><code>/api/led</code></div><input class="path" value="/led"></div>
-      <textarea class="body">{"colors":["#FF0000"]}</textarea><pre class="response">—</pre><button onclick="sendEndpoint(this)">Отправить</button>
-    </div>
-    <div class="endpoint" data-method="POST" data-path="/led/ring">
-      <div><div class="endpoint-title"><span class="method">POST</span><code>/api/led/ring</code></div><input class="path" value="/led/ring"></div>
-      <textarea class="body">{"colors":["#FF0000","#0000FF"]}</textarea><pre class="response">—</pre><button onclick="sendEndpoint(this)">Отправить</button>
-    </div>
-    <div class="endpoint" data-method="POST" data-path="/led/logo">
-      <div><div class="endpoint-title"><span class="method">POST</span><code>/api/led/logo</code></div><input class="path" value="/led/logo"></div>
-      <textarea class="body">{"colors":["#00FF00"]}</textarea><pre class="response">—</pre><button onclick="sendEndpoint(this)">Отправить</button>
-    </div>
-    <div class="endpoint" data-method="POST" data-path="/led/off">
-      <div><div class="endpoint-title"><span class="method">POST</span><code>/api/led/off</code></div><input class="path" value="/led/off"></div>
-      <textarea class="body" placeholder="Body не требуется"></textarea><pre class="response">—</pre><button onclick="sendEndpoint(this)">Отправить</button>
-    </div>
-    <div class="endpoint" data-method="POST" data-path="/led/off/ring">
-      <div><div class="endpoint-title"><span class="method">POST</span><code>/api/led/off/ring</code></div><input class="path" value="/led/off/ring"></div>
-      <textarea class="body" placeholder="Body не требуется"></textarea><pre class="response">—</pre><button onclick="sendEndpoint(this)">Отправить</button>
-    </div>
-    <div class="endpoint" data-method="POST" data-path="/led/off/logo">
-      <div><div class="endpoint-title"><span class="method">POST</span><code>/api/led/off/logo</code></div><input class="path" value="/led/off/logo"></div>
-      <textarea class="body" placeholder="Body не требуется"></textarea><pre class="response">—</pre><button onclick="sendEndpoint(this)">Отправить</button>
-    </div>
-
-    <h3>Audio</h3>
-    <div class="endpoint" data-method="POST" data-path="/audio/test">
-      <div><div class="endpoint-title"><span class="method">POST</span><code>/api/audio/test</code></div><input class="path" value="/audio/test"></div>
-      <textarea class="body" placeholder="Body не требуется"></textarea><pre class="response">4-секундный тестовый аудиофрагмент</pre><button onclick="sendEndpoint(this)">Отправить</button>
-    </div>
-
-    <h3>Громкость</h3>
-    <div class="endpoint" data-method="GET" data-path="/volume/get">
-      <div><div class="endpoint-title"><span class="method">GET</span><code>/api/volume/get</code></div><input class="path" value="/volume/get"></div>
-      <textarea class="body" placeholder="Body не требуется"></textarea><pre class="response">—</pre><button onclick="sendEndpoint(this)">Отправить</button>
-    </div>
-    <div class="endpoint" data-method="POST" data-path="/volume/set">
-      <div><div class="endpoint-title"><span class="method">POST</span><code>/api/volume/set</code></div><input class="path" value="/volume/set"></div>
-      <textarea class="body">{"percent":30}</textarea><pre class="response">—</pre><button onclick="sendEndpoint(this)">Отправить</button>
-    </div>
-
-    <h3>Media providers</h3>
-    <div class="endpoint" data-method="GET" data-path="/media">
-      <div><div class="endpoint-title"><span class="method">GET</span><code>/api/media</code></div><input class="path" value="/media"></div>
-      <textarea class="body"></textarea><pre class="response">—</pre><button onclick="sendEndpoint(this)">Отправить</button>
-    </div>
-    <div class="endpoint" data-method="POST" data-path="/media/select">
-      <div><div class="endpoint-title"><span class="method">POST</span><code>/api/media/select</code></div><input class="path" value="/media/select"></div>
-      <textarea class="body">{"provider":"radio"}</textarea><pre class="response">—</pre><button onclick="sendEndpoint(this)">Отправить</button>
-    </div>
-    <div class="endpoint" data-method="POST" data-path="/media/command">
-      <div><div class="endpoint-title"><span class="method">POST</span><code>/api/media/command</code></div><input class="path" value="/media/command"></div>
-      <textarea class="body">{"action":"pause"}</textarea><pre class="response">—</pre><button onclick="sendEndpoint(this)">Отправить</button>
-    </div>
-
-    <h3>Bluetooth</h3>
-    <div class="endpoint" data-method="GET" data-path="/bluetooth/status">
-      <div><div class="endpoint-title"><span class="method">GET</span><code>/api/bluetooth/status</code></div><input class="path" value="/bluetooth/status"></div>
-      <textarea class="body" placeholder="Body не требуется"></textarea><pre class="response">—</pre><button onclick="sendEndpoint(this)">Отправить</button>
-    </div>
-    <div class="endpoint" data-method="PUT" data-path="/bluetooth/scan">
-      <div><div class="endpoint-title"><span class="method">PUT</span><code>/api/bluetooth/scan</code></div><input class="path" value="/bluetooth/scan"></div>
-      <textarea class="body">{"on":true}</textarea><pre class="response">—</pre><button onclick="sendEndpoint(this)">Отправить</button>
-    </div>
-    <div class="endpoint" data-method="PUT" data-path="/bluetooth/power">
-      <div><div class="endpoint-title"><span class="method">PUT</span><code>/api/bluetooth/power</code></div><input class="path" value="/bluetooth/power"></div>
-      <textarea class="body">{"on":true}</textarea><pre class="response">—</pre><button onclick="sendEndpoint(this)">Отправить</button>
-    </div>
-    <div class="endpoint" data-method="PUT" data-path="/bluetooth/pairable">
-      <div><div class="endpoint-title"><span class="method">PUT</span><code>/api/bluetooth/pairable</code></div><input class="path" value="/bluetooth/pairable"></div>
-      <textarea class="body">{"on":true}</textarea><pre class="response">—</pre><button onclick="sendEndpoint(this)">Отправить</button>
-    </div>
-    <div class="endpoint" data-method="POST" data-path="/bluetooth/pair">
-      <div><div class="endpoint-title"><span class="method">POST</span><code>/api/bluetooth/pair</code></div><input class="path" value="/bluetooth/pair"></div>
-      <textarea class="body">{"address":"01:23:45:67:89:ab"}</textarea><pre class="response">—</pre><button onclick="sendEndpoint(this)">Отправить</button>
-    </div>
-    <div class="endpoint" data-method="POST" data-path="/bluetooth/connect">
-      <div><div class="endpoint-title"><span class="method">POST</span><code>/api/bluetooth/connect</code></div><input class="path" value="/bluetooth/connect"></div>
-      <textarea class="body">{"address":"01:23:45:67:89:ab"}</textarea><pre class="response">—</pre><button onclick="sendEndpoint(this)">Отправить</button>
-    </div>
-
-    <h3>Clock</h3>
-    <div class="endpoint" data-method="GET" data-path="/clock">
-      <div><div class="endpoint-title"><span class="method">GET</span><code>/api/clock</code></div><input class="path" value="/clock"></div>
-      <textarea class="body" placeholder="Body не требуется"></textarea><pre class="response">—</pre><button onclick="sendEndpoint(this)">Отправить</button>
-    </div>
-    <div class="endpoint" data-method="POST" data-path="/clock">
-      <div><div class="endpoint-title"><span class="method">POST</span><code>/api/clock</code></div><input class="path" value="/clock"></div>
-      <textarea class="body">{"time":"12:34","brightness":170}</textarea><pre class="response">—</pre><button onclick="sendEndpoint(this)">Отправить</button>
-    </div>
-    <div class="endpoint" data-method="POST" data-path="/clock/off">
-      <div><div class="endpoint-title"><span class="method">POST</span><code>/api/clock/off</code></div><input class="path" value="/clock/off"></div>
-      <textarea class="body" placeholder="Body не требуется"></textarea><pre class="response">—</pre><button onclick="sendEndpoint(this)">Отправить</button>
-    </div>
-
-    <div class="endpoint" data-method="POST" data-path="/clock/text">
-      <div><div class="endpoint-title"><span class="method">POST</span><code>/api/clock/text</code></div><input class="path" value="/clock/text"></div>
-      <textarea class="body">{"text":"RADIO","duration_ms":3000,"brightness":80}</textarea><pre class="response">—</pre><button onclick="sendEndpoint(this)">Отправить</button>
-    </div>
-
-    <h3>Input</h3>
-    <div class="endpoint" data-method="GET" data-path="/input/devices">
-      <div><div class="endpoint-title"><span class="method">GET</span><code>/api/input/devices</code></div><input class="path" value="/input/devices"></div>
-      <textarea class="body" placeholder="Body не требуется"></textarea><pre class="response">—</pre><button onclick="sendEndpoint(this)">Отправить</button>
-    </div>
-    <div class="endpoint" data-method="GET" data-path="/input/event?timeout_ms=10000">
-      <div><div class="endpoint-title"><span class="method">GET</span><code>/api/input/event</code></div><input class="path" value="/input/event?timeout_ms=10000"></div>
-      <textarea class="body" placeholder="Body не требуется"></textarea><pre class="response">—</pre><button onclick="sendEndpoint(this)">Отправить</button>
-    </div>
-    <div class="endpoint" data-method="GET" data-path="/input/events?timeout_ms=10000&amp;idle_ms=300&amp;max_events=128">
-      <div><div class="endpoint-title"><span class="method">GET</span><code>/api/input/events</code></div><input class="path" value="/input/events?timeout_ms=10000&amp;idle_ms=300&amp;max_events=128"></div>
-      <textarea class="body" placeholder="Body не требуется"></textarea><pre class="response">—</pre><button onclick="sendEndpoint(this)">Отправить</button>
-    </div>
-    <div class="endpoint" data-method="GET" data-path="/input/volume_up?timeout_ms=60000">
-      <div><div class="endpoint-title"><span class="method">GET</span><code>/api/input/volume_up</code></div><input class="path" value="/input/volume_up?timeout_ms=60000"></div>
-      <textarea class="body" placeholder="Body не требуется"></textarea><pre class="response">—</pre><button onclick="sendEndpoint(this)">Отправить</button>
-    </div>
-    <div class="endpoint" data-method="GET" data-path="/input/volume_down?timeout_ms=60000">
-      <div><div class="endpoint-title"><span class="method">GET</span><code>/api/input/volume_down</code></div><input class="path" value="/input/volume_down?timeout_ms=60000"></div>
-      <textarea class="body" placeholder="Body не требуется"></textarea><pre class="response">—</pre><button onclick="sendEndpoint(this)">Отправить</button>
-    </div>
-    <div class="endpoint" data-method="GET" data-path="/input/activate?timeout_ms=60000">
-      <div><div class="endpoint-title"><span class="method">GET</span><code>/api/input/activate</code></div><input class="path" value="/input/activate?timeout_ms=60000"></div>
-      <textarea class="body" placeholder="Body не требуется"></textarea><pre class="response">—</pre><button onclick="sendEndpoint(this)">Отправить</button>
-    </div>
-    <div class="endpoint" data-method="GET" data-path="/input/mute?timeout_ms=60000">
-      <div><div class="endpoint-title"><span class="method">GET</span><code>/api/input/mute</code></div><input class="path" value="/input/mute?timeout_ms=60000"></div>
-      <textarea class="body" placeholder="Body не требуется"></textarea><pre class="response">—</pre><button onclick="sendEndpoint(this)">Отправить</button>
-    </div>
-    <div class="endpoint" data-method="GET" data-path="/input/swipe/minus-to-logo?timeout_ms=60000">
-      <div><div class="endpoint-title"><span class="method">GET</span><code>/api/input/swipe/minus-to-logo</code></div><input class="path" value="/input/swipe/minus-to-logo?timeout_ms=60000"></div>
-      <textarea class="body" placeholder="Body не требуется"></textarea><pre class="response">—</pre><button onclick="sendEndpoint(this)">Отправить</button>
-    </div>
-    <div class="endpoint" data-method="GET" data-path="/input/swipe/plus-to-logo?timeout_ms=60000">
-      <div><div class="endpoint-title"><span class="method">GET</span><code>/api/input/swipe/plus-to-logo</code></div><input class="path" value="/input/swipe/plus-to-logo?timeout_ms=60000"></div>
-      <textarea class="body" placeholder="Body не требуется"></textarea><pre class="response">—</pre><button onclick="sendEndpoint(this)">Отправить</button>
-    </div>
-    <div class="endpoint" data-method="GET" data-path="/input/swipe/minus-to-plus?timeout_ms=60000">
-      <div><div class="endpoint-title"><span class="method">GET</span><code>/api/input/swipe/minus-to-plus</code></div><input class="path" value="/input/swipe/minus-to-plus?timeout_ms=60000"></div>
-      <textarea class="body" placeholder="Body не требуется"></textarea><pre class="response">—</pre><button onclick="sendEndpoint(this)">Отправить</button>
-    </div>
-    <div class="endpoint" data-method="GET" data-path="/input/swipe/plus-to-minus?timeout_ms=60000">
-      <div><div class="endpoint-title"><span class="method">GET</span><code>/api/input/swipe/plus-to-minus</code></div><input class="path" value="/input/swipe/plus-to-minus?timeout_ms=60000"></div>
-      <textarea class="body" placeholder="Body не требуется"></textarea><pre class="response">—</pre><button onclick="sendEndpoint(this)">Отправить</button>
-    </div>
-
-    <h3>User Lua</h3>
-    <div class="endpoint" data-method="GET" data-path="/lua/files">
-      <div><div class="endpoint-title"><span class="method">GET</span><code>/api/lua/files</code></div><input class="path" value="/lua/files"></div>
-      <textarea class="body" placeholder="Body не требуется"></textarea><pre class="response">—</pre><button onclick="sendEndpoint(this)">Отправить</button>
-    </div>
-    <div class="endpoint" data-method="POST" data-path="/lua/run">
-      <div><div class="endpoint-title"><span class="method">POST</span><code>/api/lua/run</code></div><input class="path" value="/lua/run"></div>
-      <textarea class="body">{"file":"hello.lua"}</textarea><pre class="response">—</pre><button onclick="sendEndpoint(this)">Отправить</button>
-    </div>
-    <div class="endpoint" data-method="POST" data-path="/lua/user_lua_<id>/stop">
-      <div><div class="endpoint-title"><span class="method">POST</span><code>/api/lua/:id/stop</code></div><input class="path" value="/lua/user_lua_<id>/stop"></div>
-      <textarea class="body" placeholder="Body не требуется"></textarea><pre class="response">—</pre><button onclick="sendEndpoint(this)">Отправить</button>
-    </div>
-
-    <h3>Packages</h3>
-    <div class="endpoint" data-method="GET" data-path="/plugins">
-      <div><div class="endpoint-title"><span class="method">GET</span><code>/api/plugins</code></div><input class="path" value="/plugins"></div>
-      <textarea class="body" placeholder="Body не требуется"></textarea><pre class="response">—</pre><button onclick="sendEndpoint(this)">Отправить</button>
-    </div>
-    <div class="endpoint" data-method="POST" data-path="/plugins/registry">
-      <div><div class="endpoint-title"><span class="method">POST</span><code>/api/plugins/registry</code></div><input class="path" value="/plugins/registry"></div>
-      <textarea class="body">{"registry":"https://example.org/registry","id":"example.plugin","version":"1.0.0"}</textarea><pre class="response">—</pre><button onclick="sendEndpoint(this)">Отправить</button>
-    </div>
-    <div class="endpoint" data-method="POST" data-path="/plugins/example.plugin/invoke">
-      <div><div class="endpoint-title"><span class="method">POST</span><code>/api/plugins/:id/invoke</code></div><input class="path" value="/plugins/example.plugin/invoke"></div>
-      <textarea class="body">{"args":[]}</textarea><pre class="response">—</pre><button onclick="sendEndpoint(this)">Отправить</button>
-    </div>
-    <div class="endpoint" data-method="POST" data-path="/plugins/example.plugin/stop">
-      <div><div class="endpoint-title"><span class="method">POST</span><code>/api/plugins/:id/stop</code></div><input class="path" value="/plugins/example.plugin/stop"></div>
-      <textarea class="body" placeholder="Body не требуется"></textarea><pre class="response">—</pre><button onclick="sendEndpoint(this)">Отправить</button>
-    </div>
-    <div class="endpoint" data-method="DELETE" data-path="/plugins/example.plugin">
-      <div><div class="endpoint-title"><span class="method">DELETE</span><code>/api/plugins/:id</code></div><input class="path" value="/plugins/example.plugin"></div>
-      <textarea class="body" placeholder="Body не требуется"></textarea><pre class="response">—</pre><button onclick="sendEndpoint(this)">Отправить</button>
-    </div>
-    <div class="endpoint" data-method="POST" data-path="/plugins/example.plugin/toggle">
-      <div><div class="endpoint-title"><span class="method">POST</span><code>/api/plugins/:id/toggle</code></div><input class="path" value="/plugins/example.plugin/toggle"></div>
-      <textarea class="body" placeholder="Body не требуется"></textarea><pre class="response">—</pre><button onclick="sendEndpoint(this)">Отправить</button>
-    </div>
-    <div class="endpoint" data-method="POST" data-path="/plugins/example.plugin/service/enable">
-      <div><div class="endpoint-title"><span class="method">POST</span><code>/api/plugins/:id/service/enable</code></div><input class="path" value="/plugins/example.plugin/service/enable"></div>
-      <textarea class="body" placeholder="Body не требуется"></textarea><pre class="response">—</pre><button onclick="sendEndpoint(this)">Отправить</button>
-    </div>
-    <div class="endpoint" data-method="POST" data-path="/plugins/example.plugin/service/disable">
-      <div><div class="endpoint-title"><span class="method">POST</span><code>/api/plugins/:id/service/disable</code></div><input class="path" value="/plugins/example.plugin/service/disable"></div>
-      <textarea class="body" placeholder="Body не требуется"></textarea><pre class="response">—</pre><button onclick="sendEndpoint(this)">Отправить</button>
-    </div>
-    <div class="endpoint" data-method="POST" data-path="/plugins/example.plugin/service/start">
-      <div><div class="endpoint-title"><span class="method">POST</span><code>/api/plugins/:id/service/start</code></div><input class="path" value="/plugins/example.plugin/service/start"></div>
-      <textarea class="body" placeholder="Body не требуется"></textarea><pre class="response">—</pre><button onclick="sendEndpoint(this)">Отправить</button>
-    </div>
-    <div class="endpoint" data-method="GET" data-path="/plugins/example.plugin/logs">
-      <div><div class="endpoint-title"><span class="method">GET</span><code>/api/plugins/:id/logs</code></div><input class="path" value="/plugins/example.plugin/logs"></div>
-      <textarea class="body" placeholder="Body не требуется"></textarea><pre class="response">—</pre><button onclick="sendEndpoint(this)">Отправить</button>
-    </div>
-
-    <h3>Runtime API</h3>
-    <div class="hint">Токен будет отправлен как `X-Luna-Token` для всех runtime endpoint-ов.</div>
-    <input id="runtime-token" type="password" placeholder="X-Luna-Token" style="width:min(100%,420px);margin:8px 0 12px">
-    <div class="endpoint" data-method="GET" data-path="/runtime/example.plugin/device">
-      <div><div class="endpoint-title"><span class="method">GET</span><code>/api/runtime/:id/device</code></div><input class="path" value="/runtime/example.plugin/device"></div>
-      <textarea class="body" placeholder="Body не требуется"></textarea><pre class="response">Требуется X-Luna-Token</pre><button onclick="sendEndpoint(this)">Отправить</button>
-    </div>
-    <div class="endpoint" data-method="GET" data-path="/runtime/example.plugin/sensors">
-      <div><div class="endpoint-title"><span class="method">GET</span><code>/api/runtime/:id/sensors</code></div><input class="path" value="/runtime/example.plugin/sensors"></div>
-      <textarea class="body" placeholder="Body не требуется"></textarea><pre class="response">Требуется X-Luna-Token</pre><button onclick="sendEndpoint(this)">Отправить</button>
-    </div>
-    <div class="endpoint" data-method="POST" data-path="/runtime/example.plugin/led">
-      <div><div class="endpoint-title"><span class="method">POST</span><code>/api/runtime/:id/led</code></div><input class="path" value="/runtime/example.plugin/led"></div>
-      <textarea class="body">{"colors":["#FF0000"]}</textarea><pre class="response">Требуется X-Luna-Token</pre><button onclick="sendEndpoint(this)">Отправить</button>
-    </div>
-    <div class="endpoint" data-method="POST" data-path="/runtime/example.plugin/clock">
-      <div><div class="endpoint-title"><span class="method">POST</span><code>/api/runtime/:id/clock</code></div><input class="path" value="/runtime/example.plugin/clock"></div>
-      <textarea class="body">{"time":"12:34","brightness":170}</textarea><pre class="response">Требуется X-Luna-Token</pre><button onclick="sendEndpoint(this)">Отправить</button>
-    </div>
-  </section>
-
-  <section id="install">
-    <h2>Установка .yap</h2>
-    <div class="upload-row"><input id="package-file" type="file" accept=".yap"><button onclick="uploadPackage()">POST /api/plugins</button><span id="upload-response" class="hint">—</span></div>
-  </section>
+  <div class="wrap view" id="v-plugin"><iframe id="frame" title="Веб-интерфейс плагина"></iframe></div>
+</main>
+</div>
+<div id="toasts" aria-live="polite"></div>
 
 <script>
-const api = '/api';
-const deviceResponse = document.getElementById('device-response');
-const roomResponse = document.getElementById('room-response');
-const roomInput = document.getElementById('room-input');
-const settingsResponse = document.getElementById('settings-response');
-let settingsState = {};
+const api='/api',$=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)];
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const ic=n=>'<svg class="i"><use href="#i-'+n+'"/></svg>';
+let settingsState={},dev=null,snap='',installedPluginIds=[];
 
-function applyTheme(theme) {
-  const light = theme === 'light';
-  document.body.classList.toggle('light-theme', light);
-  const toggle = document.getElementById('theme-toggle');
-  if (toggle) toggle.textContent = light ? '🌙 Тёмная тема' : '☀️ Светлая тема';
-  localStorage.setItem('luna-theme', light ? 'light' : 'dark');
-}
-function toggleTheme() {
-  applyTheme(document.body.classList.contains('light-theme') ? 'dark' : 'light');
-}
+function toast(t,k){const e=document.createElement('div');e.className='toast '+(k||'');e.textContent=t;$('#toasts').append(e);setTimeout(()=>{e.classList.add('out');setTimeout(()=>e.remove(),260)},3200)}
+function applyTheme(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('luna-theme',t)}catch(_){}$('#theme').innerHTML=ic(t==='dark'?'sun':'moon');$('#theme').title=t==='dark'?'Светлая тема':'Тёмная тема'}
+function pretty(v){try{return JSON.stringify(JSON.parse(v),null,2)}catch(_){return v||'(пустой ответ)'}}
+async function fetchApi(path,options){options=options||{};options.headers=Object.assign({'X-Luna-Local':'1'},options.headers);const response=await fetch(api+path,options);const text=await response.text();return{response:response,text:text}}
+function testJson(t){try{return JSON.parse(t)}catch(_){return null}}
+function setStatus(ok){const s=$('#status');s.className='pill '+(ok?'ok':'bad');s.firstElementChild.textContent=ok?'На связи':'Нет связи'}
 
-function pretty(value) {
-  try { return JSON.stringify(JSON.parse(value), null, 2); }
-  catch (_) { return value || '(пустой ответ)'; }
+/* ---------- навигация ---------- */
+const T={overview:'Обзор',tests:'Тест API',settings:'Настройки',endpoints:'Endpoints'};
+const alias={'api-endpoints':'endpoints',room:'overview',web:'overview','':'overview'};
+let plugins=[];
+function route(){
+  let h=decodeURIComponent(location.hash.slice(1));h=alias[h]||h;
+  const pid=h.indexOf('plugin/')===0?h.slice(7):null;
+  if(!pid&&!T[h])h='overview';
+  const v=pid?'plugin':h;
+  $$('.view').forEach(e=>e.classList.toggle('on',e.id==='v-'+v));
+  $$('.nv[data-v]').forEach(a=>a.classList.toggle('on',a.dataset.v===(pid?'plugin/'+pid:h)));
+  $('#title').textContent=pid||T[h];document.title=(pid||T[h])+' · Luna';
+  if(pid){const p=plugins.find(x=>x.id===pid);const f=$('#frame');if(p&&f.getAttribute('src')!==p.url)f.src=p.url}
+  $('#app').classList.remove('open');window.scrollTo(0,0);
 }
-function show(element, status, text) {
-  element.className = 'response ' + (status >= 200 && status < 300 ? 'ok' : 'bad');
-  element.textContent = status + ' ' + (text ? pretty(text) : 'OK');
-}
-async function fetchApi(path, options) {
-  options = options || {};
-  // Required by the server for form-encoded mutations (e.g. .yap upload).
-  options.headers = Object.assign({ 'X-Luna-Local': '1' }, options.headers);
-  const response = await fetch(api + path, options);
-  const text = await response.text();
-  return { response: response, text: text };
-}
-async function sendDevice() {
-  deviceResponse.textContent = 'Загрузка…';
-  try {
-    const result = await fetchApi('/device');
-    show(deviceResponse, result.response.status, result.text);
-  } catch (error) { show(deviceResponse, 0, error.message); }
-}
-async function loadRoom() {
-  roomResponse.textContent = 'Загрузка…';
-  try {
-    const result = await fetchApi('/room');
-    show(roomResponse, result.response.status, result.text);
-    if (result.response.ok) roomInput.value = (JSON.parse(result.text).room || '');
-  } catch (error) { show(roomResponse, 0, error.message); }
-}
-async function saveRoom() {
-  roomResponse.textContent = 'Сохранение…';
-  try {
-    const result = await fetchApi('/room', { method:'PUT', headers:{'content-type':'application/json'}, body:JSON.stringify({room:roomInput.value}) });
-    show(roomResponse, result.response.status, result.text);
-  } catch (error) { show(roomResponse, 0, error.message); }
-}
-async function loadSettings() {
-  settingsResponse.textContent = 'Загрузка…';
-  try {
-    const result = await fetchApi('/settings');
-    show(settingsResponse, result.response.status, result.text);
-    if (result.response.ok) { settingsState = JSON.parse(result.text); fillSettings(settingsState); }
-  } catch (error) { show(settingsResponse, 0, error.message); }
-}
-function listValue(value) { return Array.isArray(value) ? value.join(', ') : ''; }
-function splitValue(value) { return value.split(',').map(function (item) { return item.trim(); }).filter(Boolean); }
-function check(id, value) { document.getElementById(id).checked = value === true; }
-function fillSettings(settings) {
-  const lua = settings.lua || {}, permissions = lua.permissions || {}, led = settings.led || {};
-  check('setting-binaries', settings.allow_plugin_binaries === true);
-  check('setting-updates', !settings.updates || settings.updates.enabled !== false);
-  check('setting-lua-enabled', lua.enabled === true);
-  check('setting-lua-infinite', lua.allow_infinite_loops === true);
-  document.getElementById('setting-lua-runtime').value = lua.max_runtime_seconds || 30;
-  document.getElementById('setting-lua-share').value = lua.share_dir || 'share/lua';
-  document.getElementById('setting-led-profile').value = led.profile || '';
-  document.getElementById('setting-led-count').value = led.count || 6;
-  document.getElementById('setting-led-root').value = led.sysfs_root || '/sys/class/leds';
-  document.querySelectorAll('[data-permission]').forEach(function (input) { input.checked = permissions[input.dataset.permission] === true; });
-  document.getElementById('setting-network-allow').value = listValue(lua.network_allow);
-  document.getElementById('setting-input-devices').value = listValue(lua.input_devices);
-  document.getElementById('setting-ipc-services').value = listValue(lua.ipc_services);
-  document.getElementById('setting-command-phrases').value = listValue(lua.command_phrases);
-}
-function readSettings() {
-  const settings = JSON.parse(JSON.stringify(settingsState));
-  settings.led = settings.led || {};
-  settings.updates = settings.updates || {};
-  settings.lua = settings.lua || {};
-  settings.lua.permissions = settings.lua.permissions || {};
-  settings.allow_plugin_binaries = document.getElementById('setting-binaries').checked;
-  settings.updates.enabled = document.getElementById('setting-updates').checked;
-  settings.led.profile = document.getElementById('setting-led-profile').value;
-  settings.led.count = Number(document.getElementById('setting-led-count').value);
-  settings.led.sysfs_root = document.getElementById('setting-led-root').value;
-  settings.lua.enabled = document.getElementById('setting-lua-enabled').checked;
-  settings.lua.allow_infinite_loops = document.getElementById('setting-lua-infinite').checked;
-  settings.lua.max_runtime_seconds = Number(document.getElementById('setting-lua-runtime').value);
-  settings.lua.share_dir = document.getElementById('setting-lua-share').value;
-  document.querySelectorAll('[data-permission]').forEach(function (input) { settings.lua.permissions[input.dataset.permission] = input.checked; });
-  settings.lua.network_allow = splitValue(document.getElementById('setting-network-allow').value);
-  settings.lua.input_devices = splitValue(document.getElementById('setting-input-devices').value);
-  settings.lua.ipc_services = splitValue(document.getElementById('setting-ipc-services').value);
-  settings.lua.command_phrases = splitValue(document.getElementById('setting-command-phrases').value);
-  return settings;
-}
-async function saveSettings() {
-  settingsResponse.textContent = 'Сохранение…';
-  try {
-    const body = JSON.stringify(readSettings());
-    const result = await fetchApi('/settings', { method:'PUT', headers:{'content-type':'application/json'}, body:body });
-    show(settingsResponse, result.response.status, result.text);
-    if (result.response.ok) settingsState = readSettings();
-  } catch (error) { show(settingsResponse, 0, error.message); }
-}
-async function sendEndpoint(button) {
-  const card = button.closest('.endpoint');
-  const path = card.querySelector('.path').value;
-  const body = card.querySelector('.body').value.trim();
-  const response = card.querySelector('.response');
-  const options = { method:card.dataset.method };
-  options.headers = {};
-  if (path.indexOf('/runtime/') === 0) {
-    const token = document.getElementById('runtime-token').value.trim();
-    if (token) options.headers['X-Luna-Token'] = token;
-  }
-  if (body) { options.headers['content-type'] = 'application/json'; options.body = body; }
-  response.textContent = 'Отправка…';
-  try {
-    const result = await fetchApi(path, options);
-    show(response, result.response.status, result.text);
-  } catch (error) { show(response, 0, error.message); }
-}
-async function uploadPackage() {
-  const file = document.getElementById('package-file').files[0];
-  const output = document.getElementById('upload-response');
-  if (!file) { output.textContent = 'Выберите .yap'; return; }
-  const form = new FormData();
-  form.append('package', file, file.name);
-  output.textContent = 'Загрузка…';
-  try {
-    const result = await fetchApi('/plugins', { method:'POST', body:form });
-    output.textContent = result.response.status + ' ' + pretty(result.text);
-  } catch (error) { output.textContent = 'Ошибка: ' + error.message; }
+window.addEventListener('hashchange',route);
+$('#menu').onclick=()=>$('#app').classList.add('open');
+$('#scrim').onclick=()=>$('#app').classList.remove('open');
+document.addEventListener('keydown',e=>{
+  if(e.key==='Escape')$('#app').classList.remove('open');
+  if(e.key==='/'&&!/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)){e.preventDefault();location.hash='endpoints';setTimeout(()=>$('#endpoint-search').focus(),30)}
+});
+async function refreshCustomWebTabs(){
+  try{
+    const r=await fetchApi('/custom-web');if(!r.response.ok)return;
+    const pages=testJson(r.text)||[];
+    if(JSON.stringify(pages)===JSON.stringify(plugins))return;
+    plugins=pages;
+    $('#plug').innerHTML=pages.map(p=>'<a class="nv" data-v="plugin/'+esc(p.id)+'" href="#plugin/'+encodeURIComponent(p.id)+'" title="Веб-интерфейс '+esc(p.id)+'">'+ic('plug')+esc(p.id)+'</a>').join('');
+    $('#pg').hidden=!pages.length;
+    if(location.hash.indexOf('#plugin/')===0&&!pages.some(p=>'#plugin/'+encodeURIComponent(p.id)===location.hash))location.hash='overview';else route();
+  }catch(_){}
 }
 
-function refreshPageData() {
-  sendDevice();
-  loadRoom();
-  loadSettings();
-  refreshCustomWebTabs();
+/* ---------- список плагинов из /api/plugins ---------- */
+async function refreshPluginIds(){
+  try{
+    const r=await fetchApi('/plugins');
+    if(!r.response.ok)return;
+    const list=testJson(r.text);
+    if(!Array.isArray(list))return;
+    const ids=list.map(item=>item&&item.manifest&&item.manifest.id).filter(Boolean);
+    if(JSON.stringify(ids)===JSON.stringify(installedPluginIds))return;
+    installedPluginIds=ids;
+    updatePluginSelects();
+  }catch(_){}
 }
 
-function setupEndpointNavigation() {
-  const section = document.getElementById('api-endpoints');
-  const tabs = document.getElementById('endpoint-tabs');
-  const search = document.getElementById('endpoint-search');
-  if (!section || !tabs || !search) return;
-
-  const endpoints = Array.from(section.querySelectorAll('.endpoint'));
-  const headings = Array.from(section.querySelectorAll('h3'));
-  const categoryByEndpoint = new Map();
-  headings.forEach(function (heading) {
-    const category = heading.textContent.trim();
-    heading.classList.add('endpoint-category');
-    let next = heading.nextElementSibling;
-    while (next && !next.matches('h3')) {
-      if (next.matches('.endpoint')) categoryByEndpoint.set(next, category);
-      next = next.nextElementSibling;
+function updatePluginSelects(){
+  $$('.ep-plugin-select').forEach(sel=>{
+    const prev=sel.value;
+    if(!installedPluginIds.length){
+      sel.innerHTML='<option value="">Нет установленных плагинов</option>';
+      sel.disabled=true;
+    }else{
+      sel.disabled=false;
+      sel.innerHTML=installedPluginIds.map(id=>'<option value="'+esc(id)+'">'+esc(id)+'</option>').join('');
+      if(prev&&installedPluginIds.includes(prev))sel.value=prev;
     }
+    syncPluginPath(sel.closest('.ep'));
   });
+}
 
-  let currentCategory = 'all';
-  const categories = ['Все'].concat(Array.from(new Set(endpoints.map(function (item) {
-    return categoryByEndpoint.get(item) || 'Другое';
-  }))));
-  categories.forEach(function (label, index) {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.textContent = label;
-    button.dataset.category = index === 0 ? 'all' : label;
-    button.setAttribute('role', 'tab');
-    button.onclick = function () {
-      currentCategory = button.dataset.category;
-      tabs.querySelectorAll('button').forEach(function (item) { item.classList.toggle('active', item === button); });
-      updateEndpointVisibility();
+function syncPluginPath(ep){
+  if(!ep)return;
+  const sel=ep.querySelector('.ep-plugin-select');
+  const tpl=ep.dataset.tpl;
+  if(!sel||!tpl)return;
+  const id=sel.value||'example.plugin';
+  const resolved=tpl.replace('{id}',id);
+  ep.dataset.resolvedPath=resolved;
+  const prevEl=ep.querySelector('.path-preview b');
+  if(prevEl)prevEl.textContent='/api'+resolved;
+}
+
+/* ---------- обзор: LED (динамический масштаб и схема на основе /device) ---------- */
+const COLORS=['#FF3B30','#FF9500','#FFCC00','#34C759','#00C7BE','#0A84FF','#AF52DE','#FFFFFF'];
+let cols=['#FF3B30'],tgt='',ringC=[],logoC=[];
+let ledCfg={ring_count:6,has_logo:true,logo_count:1};
+
+function buildLedCanvas(cfg){
+  ledCfg=Object.assign({ring_count:0,has_logo:false,logo_count:0},cfg);
+  const rc=Math.max(0,Number(ledCfg.ring_count)||0);
+  const lc=ledCfg.has_logo?Math.max(1,Number(ledCfg.logo_count)||1):0;
+  let s='';
+  const cx=125,cy=125;
+
+  // Внешнее кольцо LED (если ring_count > 0)
+  if(rc>0){
+    const R=94;
+    const rSeg=rc>18?6.5:rc>10?9:12;
+    for(let i=0;i<rc;i++){
+      const a=i/rc*2*Math.PI-Math.PI/2;
+      const x=(cx+R*Math.cos(a)).toFixed(1);
+      const y=(cy+R*Math.sin(a)).toFixed(1);
+      s+='<circle class="seg ring-seg" style="--i:'+i+'" cx="'+x+'" cy="'+y+'" r="'+rSeg+'"/>';
+    }
+  }
+
+  // Центральный блок / логотип (если has_logo: true)
+  if(lc>0){
+    if(lc===1){
+      const rLogo=rc>0?38:68;
+      s+='<circle id="logo" class="logo-seg" cx="'+cx+'" cy="'+cy+'" r="'+rLogo+'"/>';
+    }else{
+      // Несколько светодиодов в лого (например logo_count: 6 при ring_count: 0)
+      const baseR=rc>0?42:82;
+      const innerR=rc>0?24:48;
+      const dotR=rc>0?(lc>8?4.5:6.5):(lc>12?7:lc>6?10:13);
+      s+='<circle cx="'+cx+'" cy="'+cy+'" r="'+baseR+'" fill="none" stroke="var(--line)" stroke-dasharray="3 3" opacity=".65"/>';
+      for(let i=0;i<lc;i++){
+        const a=i/lc*2*Math.PI-Math.PI/2;
+        const x=(cx+innerR*Math.cos(a)).toFixed(1);
+        const y=(cy+innerR*Math.sin(a)).toFixed(1);
+        s+='<circle class="seg logo-seg" style="--i:'+(rc+i)+'" cx="'+x+'" cy="'+y+'" r="'+dotR+'"/>';
+      }
+    }
+  }
+
+  if(!s){
+    s='<circle cx="'+cx+'" cy="'+cy+'" r="60" fill="none" stroke="var(--line)" stroke-dasharray="4 4"/>'
+     +'<text x="'+cx+'" y="'+(cy+4)+'" text-anchor="middle" fill="var(--mut)" font-size="13">Нет LED</text>';
+  }
+
+  $('#ring').innerHTML=s;
+
+  // Обновляем доступность кнопок выбора зоны
+  const btnRing=$('#tgt button[data-t="ring"]');
+  const btnLogo=$('#tgt button[data-t="logo"]');
+  if(btnRing)btnRing.style.display=rc>0?'':'none';
+  if(btnLogo)btnLogo.style.display=lc>0?'':'none';
+  if((tgt==='ring'&&rc===0)||(tgt==='logo'&&lc===0)){
+    tgt='';
+    $$('#tgt button').forEach(x=>x.classList.toggle('on',x.dataset.t===''));
+  }
+
+  const info=[];
+  if(rc>0)info.push('кольцо: '+rc+' LED');
+  if(lc>0)info.push('лого: '+lc+' LED');
+  $('#led-desc').textContent=info.length
+    ?'Конфигурация: '+info.join(', ')+'. Выберите один или несколько цветов.'
+    :'Цвета, которые вы отправили на LED. Выберите один или несколько.';
+
+  drawRing();
+}
+
+function glow(el,c){
+  if(!el)return;
+  el.style.fill=c||'';
+  el.style.stroke=c?c:'';
+  el.style.filter=c?'drop-shadow(0 0 8px '+c+')':'';
+}
+function drawRing(){
+  $$('#ring .ring-seg').forEach((el,i)=>glow(el,ringC.length?ringC[i%ringC.length]:null));
+  $$('#ring .logo-seg').forEach((el,i)=>glow(el,logoC.length?logoC[i%logoC.length]:null));
+}
+function drawSwatches(){
+  $('#sws').innerHTML=COLORS.map(c=>'<button class="sc'+(cols.includes(c)?' on':'')+'" data-c="'+c+'" style="background:'+c+'" aria-label="'+c+'" aria-pressed="'+cols.includes(c)+'"></button>').join('')
+   +cols.filter(c=>!COLORS.includes(c)).map(c=>'<button class="sc on" data-c="'+c+'" style="background:'+c+'" aria-label="'+c+'"></button>').join('')
+   +'<label class="sc c" title="Свой цвет"><input type="color" id="cc" value="#ff3b30"></label>';
+}
+$('#sws').addEventListener('click',e=>{const b=e.target.closest('.sc[data-c]');if(!b)return;const c=b.dataset.c;
+  if(cols.includes(c)){if(cols.length>1)cols=cols.filter(x=>x!==c)}else cols=cols.concat(c);drawSwatches()});
+$('#sws').addEventListener('change',e=>{if(e.target.id==='cc'){const c=e.target.value.toUpperCase();if(!cols.includes(c))cols=cols.concat(c);drawSwatches()}});
+$('#tgt').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;tgt=b.dataset.t;$$('#tgt button').forEach(x=>x.classList.toggle('on',x===b))});
+
+async function ledSend(off){
+  const path='/led'+(off?'/off':'')+(tgt?'/'+tgt:'');const btn=off?$('#led-off'):$('#led-on');btn.disabled=true;
+  try{
+    const o={method:'POST'};if(!off){o.headers={'content-type':'application/json'};o.body=JSON.stringify({colors:cols})}
+    const r=await fetchApi(path,o);
+    if(r.response.ok){
+      if(tgt!=='logo')ringC=off?[]:cols.slice();
+      if(tgt!=='ring')logoC=off?[]:cols.slice();
+      drawRing();toast(off?'LED выключены':'Цвета отправлены');
+    }else toast('Ошибка '+r.response.status+': '+pretty(r.text).slice(0,120),'bad');
+  }catch(e){toast('Нет связи: '+e.message,'bad')}finally{btn.disabled=false}
+}
+$('#led-on').onclick=()=>ledSend(false);$('#led-off').onclick=()=>ledSend(true);
+
+/* ---------- обзор: устройство и комната ---------- */
+async function sendDevice(){
+  const b=$('#dev-b');$('#dev').classList.add('busy');
+  try{
+    const r=await fetchApi('/device');setStatus(r.response.ok);
+    if(!r.response.ok){b.innerHTML='<p class="bad" style="margin-top:14px">Ошибка '+r.response.status+'</p><pre class="bad">'+esc(pretty(r.text))+'</pre>';return}
+    const j=testJson(r.text);dev=j;
+    if(!j||typeof j!=='object'){b.innerHTML='<pre>'+esc(pretty(r.text))+'</pre>';return}
+    const sc=[],nested=[];
+    Object.keys(j).forEach(k=>{const v=j[k];(v!==null&&typeof v==='object'?nested:sc).push(k)});
+    let h='<dl class="kv">'+sc.map(k=>'<dt>'+esc(k)+'</dt><dd>'+esc(j[k])+'</dd>').join('')
+      +nested.filter(k=>k!=='features').map(k=>'<dt>'+esc(k)+'</dt><dd><code>'+esc(JSON.stringify(j[k]))+'</code></dd>').join('')+'</dl>';
+    if(Array.isArray(j.features)&&j.features.length)h+='<div class="chips">'+j.features.map(f=>'<span class="chip">'+esc(f)+'</span>').join('')+'</div>';
+    h+='<details><summary>Ответ целиком</summary><pre>'+esc(JSON.stringify(j,null,2))+'</pre></details>';
+    b.innerHTML=h;
+    if(j.model)$('#hname').textContent=j.model;
+
+    // Парсим параметры LED из j.led или верхнего уровня j
+    const src=j.led&&typeof j.led==='object'?j.led:j;
+    const nextCfg={
+      ring_count:src.ring_count!==undefined?Number(src.ring_count):6,
+      has_logo:src.has_logo!==undefined?Boolean(src.has_logo):true,
+      logo_count:src.logo_count!==undefined?Number(src.logo_count):1
     };
-    if (index === 0) button.classList.add('active');
-    tabs.appendChild(button);
+    if(JSON.stringify(nextCfg)!==JSON.stringify(ledCfg)){
+      buildLedCanvas(nextCfg);
+    }
+  }catch(e){setStatus(false);b.innerHTML='<p class="bad" style="margin-top:14px">'+esc(e.message)+'</p>'}
+  finally{$('#dev').classList.remove('busy')}
+}
+async function loadRoom(){try{const r=await fetchApi('/room');if(r.response.ok)$('#room-input').value=(testJson(r.text)||{}).room||''}catch(_){}}
+async function saveRoom(){
+  try{const r=await fetchApi('/room',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({room:$('#room-input').value})});
+    r.response.ok?toast('Комната сохранена'):toast('Ошибка '+r.response.status,'bad')}catch(e){toast(e.message,'bad')}
+}
+$('#dev-r').onclick=sendDevice;$('#room-save').onclick=saveRoom;
+$('#room-input').addEventListener('keydown',e=>{if(e.key==='Enter')saveRoom()});
+
+/* ---------- настройки ---------- */
+const PERMS=[['led','LED'],['volume','Громкость'],['audio','Audio'],['microphone','Микрофон'],['bluetooth','Bluetooth'],['display','Display'],['sensors','Sensors'],['clock','Clock'],['input','Input'],['network','Network'],['ipc_read','IPC read'],['ipc_control','IPC control'],['commands','Commands'],['system','System'],['exec','Exec'],['web','Custom Web']];
+$('#perms').innerHTML=PERMS.map(p=>'<label class="sw"><span>'+p[1]+(p[0]==='exec'||p[0]==='system'?'<small>повышенный риск</small>':'')+'</span><input data-permission="'+p[0]+'" type="checkbox"></label>').join('');
+function listValue(v){return Array.isArray(v)?v.join(', '):''}
+function splitValue(v){return v.split(',').map(i=>i.trim()).filter(Boolean)}
+function check(id,v){document.getElementById(id).checked=v===true}
+function fillSettings(s){
+  const lua=s.lua||{},perm=lua.permissions||{},led=s.led||{};
+  check('setting-binaries',s.allow_plugin_binaries===true);
+  check('setting-updates',!s.updates||s.updates.enabled!==false);
+  check('setting-lua-enabled',lua.enabled===true);
+  check('setting-lua-infinite',lua.allow_infinite_loops===true);
+  $('#setting-lua-runtime').value=lua.max_runtime_seconds||30;
+  $('#setting-lua-share').value=lua.share_dir||'share/lua';
+  $('#setting-led-profile').value=led.profile||'';
+  $('#setting-led-count').value=led.count||6;
+  $('#setting-led-root').value=led.sysfs_root||'/sys/class/leds';
+  $$('[data-permission]').forEach(i=>{i.checked=perm[i.dataset.permission]===true});
+  $('#setting-network-allow').value=listValue(lua.network_allow);
+  $('#setting-input-devices').value=listValue(lua.input_devices);
+  $('#setting-ipc-services').value=listValue(lua.ipc_services);
+  $('#setting-command-phrases').value=listValue(lua.command_phrases);
+  snap=JSON.stringify(readSettings());dirty();
+}
+function readSettings(){
+  const s=JSON.parse(JSON.stringify(settingsState));
+  s.led=s.led||{};s.updates=s.updates||{};s.lua=s.lua||{};s.lua.permissions=s.lua.permissions||{};
+  s.allow_plugin_binaries=$('#setting-binaries').checked;
+  s.updates.enabled=$('#setting-updates').checked;
+  s.led.profile=$('#setting-led-profile').value;
+  s.led.count=Number($('#setting-led-count').value);
+  s.led.sysfs_root=$('#setting-led-root').value;
+  s.lua.enabled=$('#setting-lua-enabled').checked;
+  s.lua.allow_infinite_loops=$('#setting-lua-infinite').checked;
+  s.lua.max_runtime_seconds=Number($('#setting-lua-runtime').value);
+  s.lua.share_dir=$('#setting-lua-share').value;
+  $$('[data-permission]').forEach(i=>{s.lua.permissions[i.dataset.permission]=i.checked});
+  s.lua.network_allow=splitValue($('#setting-network-allow').value);
+  s.lua.input_devices=splitValue($('#setting-input-devices').value);
+  s.lua.ipc_services=splitValue($('#setting-ipc-services').value);
+  s.lua.command_phrases=splitValue($('#setting-command-phrases').value);
+  return s;
+}
+const isDirty=()=>snap!==''&&JSON.stringify(readSettings())!==snap;
+function dirty(){$('#sv').classList.toggle('show',isDirty())}
+$('#v-settings').addEventListener('input',dirty);$('#v-settings').addEventListener('change',dirty);
+async function loadSettings(){
+  try{const r=await fetchApi('/settings');
+    if(r.response.ok){settingsState=JSON.parse(r.text);fillSettings(settingsState)}else toast('Настройки: ошибка '+r.response.status,'bad')}
+  catch(e){toast('Настройки: '+e.message,'bad')}
+}
+async function saveSettings(){
+  const b=$('#s-save');b.disabled=true;
+  try{const body=JSON.stringify(readSettings());
+    const r=await fetchApi('/settings',{method:'PUT',headers:{'content-type':'application/json'},body:body});
+    if(r.response.ok){settingsState=JSON.parse(body);snap=JSON.stringify(readSettings());dirty();toast('Настройки сохранены')}
+    else toast('Не сохранилось: '+r.response.status+' '+pretty(r.text).slice(0,120),'bad');
+  }catch(e){toast(e.message,'bad')}finally{b.disabled=false}
+}
+$('#s-save').onclick=saveSettings;$('#s-reset').onclick=()=>fillSettings(settingsState);
+
+/* ---------- endpoints ---------- */
+const EP=`# Device и sensors
+GET /room
+PUT /room {"room":"Кухня"}
+PUT /device {"model":"yandexmini3","architecture":"aarch64","features":[]}
+GET /sensors
+# LED
+POST /led {"colors":["#FF0000"]}
+POST /led/ring {"colors":["#FF0000","#0000FF"]}
+POST /led/logo {"colors":["#00FF00"]}
+POST /led/off
+POST /led/off/ring
+POST /led/off/logo
+# Audio
+POST /audio/test
+# Громкость
+GET /volume/get
+POST /volume/set {"percent":30}
+# Media providers
+GET /media
+POST /media/select {"provider":"radio"}
+POST /media/command {"action":"pause"}
+# Bluetooth
+GET /bluetooth/status
+PUT /bluetooth/scan {"on":true}
+PUT /bluetooth/power {"on":true}
+PUT /bluetooth/pairable {"on":true}
+POST /bluetooth/pair {"address":"01:23:45:67:89:ab"}
+POST /bluetooth/connect {"address":"01:23:45:67:89:ab"}
+# Clock
+GET /clock
+POST /clock {"time":"12:34","brightness":170}
+POST /clock/off
+POST /clock/text {"text":"RADIO","duration_ms":3000,"brightness":80}
+# Input
+GET /input/devices
+GET /input/event?timeout_ms=10000
+GET /input/events?timeout_ms=10000&idle_ms=300&max_events=128
+GET /input/volume_up?timeout_ms=60000
+GET /input/volume_down?timeout_ms=60000
+GET /input/activate?timeout_ms=60000
+GET /input/mute?timeout_ms=60000
+GET /input/swipe/minus-to-logo?timeout_ms=60000
+GET /input/swipe/plus-to-logo?timeout_ms=60000
+GET /input/swipe/minus-to-plus?timeout_ms=60000
+GET /input/swipe/plus-to-minus?timeout_ms=60000
+# User Lua
+GET /lua/files
+POST /lua/run {"file":"hello.lua"}
+POST /lua/user_lua_<id>/stop
+# Packages
+GET /plugins
+POST /plugins/registry {"registry":"https://example.org/registry","id":"example.plugin","version":"1.0.0"}
+POST /plugins/{id}/invoke {"args":[]}
+POST /plugins/{id}/stop
+DELETE /plugins/{id}
+POST /plugins/{id}/toggle
+POST /plugins/{id}/service/enable
+POST /plugins/{id}/service/disable
+POST /plugins/{id}/service/start
+GET /plugins/{id}/logs
+# Runtime API
+GET /runtime/example.plugin/device
+GET /runtime/example.plugin/sensors
+POST /runtime/example.plugin/led {"colors":["#FF0000"]}
+POST /runtime/example.plugin/clock {"time":"12:34","brightness":170}`;
+
+let epCat='';
+function buildEndpoints(){
+  const cats=[];let h='';
+  EP.split('\n').forEach(line=>{
+    if(line[0]==='#'){const c=line.slice(2);cats.push(c);h+='<h3 class="cat" data-c="'+esc(c)+'">'+esc(c)+'</h3>';return}
+    const m=line.match(/^(\w+) (\S+)(?: (.*))?$/);
+    const method=m[1],pq=m[2],rawBody=m[3]||'';
+    const isPluginEndpoint=pq.indexOf('/plugins/{id}')===0;
+
+    // Разбираем структуру body:
+    // 1. Нет body -> mode='none'
+    // 2. Одно поле boolean -> mode='bool' (toggle кнопка)
+    // 3. Одно поле (строка, число, массив и т.д.) -> mode='single' (просто ввод значения с названием ключа)
+    // 4. Несколько полей -> mode='json'
+    let bodyMode='none',singleKey='',singleVal='',singleType='string',boolVal=true;
+    if(rawBody){
+      const parsed=testJson(rawBody);
+      if(parsed&&typeof parsed==='object'&&!Array.isArray(parsed)){
+        const keys=Object.keys(parsed);
+        if(keys.length===1){
+          singleKey=keys[0];
+          const v=parsed[singleKey];
+          if(typeof v==='boolean'){
+            bodyMode='bool';
+            boolVal=v;
+          }else if(typeof v==='number'){
+            bodyMode='single';
+            singleType='number';
+            singleVal=String(v);
+          }else if(typeof v==='string'){
+            bodyMode='single';
+            singleType='string';
+            singleVal=v;
+          }else{
+            bodyMode='single';
+            singleType='json_val';
+            singleVal=JSON.stringify(v);
+          }
+        }else{
+          bodyMode='json';
+        }
+      }else{
+        bodyMode='json';
+      }
+    }
+
+    let pathFieldHtml='';
+    if(isPluginEndpoint){
+      pathFieldHtml='<div class="fld"><span>Плагин (из <code>/api/plugins</code>)</span>'
+        +'<select class="in ep-plugin-select"><option value="">Загрузка списка плагинов…</option></select>'
+        +'<div class="path-preview">Итоговый путь: <b>/api'+esc(pq)+'</b></div></div>';
+    }else{
+      pathFieldHtml='<label class="fld">Путь<input class="in path" value="'+esc(pq)+'"></label>';
+    }
+
+    let bodyFieldHtml='';
+    if(bodyMode==='bool'){
+      bodyFieldHtml='<div class="fld"><span>Параметр <code class="key-tag">'+esc(singleKey)+'</code></span>'
+        +'<label class="toggle-row"><span class="lbl">Значение: <span class="toggle-state">'+(boolVal?'true (ON)':'false (OFF)')+'</span></span>'
+        +'<input type="checkbox" class="tg-input ep-bool" data-key="'+esc(singleKey)+'"'+(boolVal?' checked':'')+'></label></div>';
+    }else if(bodyMode==='single'){
+      const inpType=singleType==='number'?'number':'text';
+      bodyFieldHtml='<label class="fld"><span>Ключ: <code class="key-tag">'+esc(singleKey)+'</code></span>'
+        +'<input class="in ep-single" type="'+inpType+'" data-key="'+esc(singleKey)+'" data-vtype="'+singleType+'" value="'+esc(singleVal)+'"></label>';
+    }else if(bodyMode==='json'){
+      bodyFieldHtml='<label class="fld">Body (JSON)<textarea class="in body">'+esc(rawBody)+'</textarea></label>';
+    }
+
+    h+='<div class="ep" data-m="'+method+'" data-c="'+esc(cats[cats.length-1])+'" data-k="'+esc((method+' '+pq).toLowerCase())+'"'
+     +(isPluginEndpoint?' data-tpl="'+esc(pq)+'"':'')+' data-bmode="'+bodyMode+'">'
+     +'<button class="ep-h" aria-expanded="false"><span class="m '+method+'">'+method+'</span><code>/api'+esc(pq.split('?')[0])+'</code><span class="st"></span>'+ic('chev')+'</button>'
+     +'<div class="ep-b"><div class="ep-i"><div>'
+     +pathFieldHtml
+     +bodyFieldHtml
+     +'<div class="row" style="justify-content:flex-start"><button class="btn pri send">Отправить</button><span class="meta mut"></span></div>'
+     +'<pre class="res" hidden></pre></div></div></div></div>';
   });
+  $('#eps').innerHTML=h;
+  $('#endpoint-tabs').innerHTML=['Все'].concat(cats).map((c,i)=>'<button class="chip'+(i?'':' on')+'" data-c="'+(i?esc(c):'')+'">'+esc(c)+'</button>').join('');
+  updatePluginSelects();
+  filterEp();
+}
 
-  const empty = document.createElement('div');
-  empty.className = 'empty-filter';
-  empty.textContent = 'Ничего не найдено';
-  section.appendChild(empty);
+function filterEp(){
+  const q=$('#endpoint-search').value.trim().toLowerCase();let n=0;const seen={};
+  $$('#eps .ep').forEach(e=>{const ok=(!epCat||e.dataset.c===epCat)&&(!q||e.dataset.k.indexOf(q)>=0||e.dataset.c.toLowerCase().indexOf(q)>=0);e.classList.toggle('hid',!ok);if(ok){n++;seen[e.dataset.c]=1}});
+  $$('#eps .cat').forEach(h=>h.classList.toggle('hid',!seen[h.dataset.c]));
+  $('#ep-empty').classList.toggle('hid',n>0);$('#ep-count').textContent=n+' шт.';
+}
 
-  function updateEndpointVisibility() {
-    const query = search.value.trim().toLowerCase();
-    let visible = 0;
-    endpoints.forEach(function (item) {
-      const itemCategory = categoryByEndpoint.get(item) || 'Другое';
-      const haystack = (item.textContent + ' ' + item.dataset.path).toLowerCase();
-      const matches = (currentCategory === 'all' || currentCategory === itemCategory) && (!query || haystack.indexOf(query) >= 0);
-      item.classList.toggle('is-hidden', !matches);
-      if (matches) visible += 1;
-    });
-    headings.forEach(function (heading) {
-      const headingCategory = heading.textContent.trim();
-      const hasVisible = endpoints.some(function (item) {
-        return !item.classList.contains('is-hidden') && categoryByEndpoint.get(item) === headingCategory;
-      });
-      heading.classList.toggle('is-hidden', !hasVisible);
-    });
-    empty.style.display = visible ? 'none' : 'block';
+async function sendEndpoint(ep){
+  let path='';
+  if(ep.dataset.tpl){
+    const sel=ep.querySelector('.ep-plugin-select');
+    if(!sel||!sel.value){toast('Выберите плагин из списка','bad');return}
+    path=ep.dataset.tpl.replace('{id}',encodeURIComponent(sel.value));
+  }else{
+    path=ep.querySelector('.path').value;
   }
-  search.addEventListener('input', updateEndpointVisibility);
-  updateEndpointVisibility();
-}
 
-let apiTestStopped = false;
-let apiTestRunning = false;
-const apiTestLog = document.getElementById('api-test-log');
-const apiTestStart = document.getElementById('api-test-start');
-const apiTestStop = document.getElementById('api-test-stop');
-
-function testLog(message) {
-  const stamp = new Date().toLocaleTimeString();
-  if (apiTestLog.textContent === 'Тест ещё не запускался') apiTestLog.textContent = '';
-  apiTestLog.textContent += '[' + stamp + '] ' + message + '\n';
-  apiTestLog.scrollTop = apiTestLog.scrollHeight;
-}
-function testSleep(milliseconds) {
-  return new Promise(function (resolve) { setTimeout(resolve, milliseconds); });
-}
-function testJson(text) {
-  try { return JSON.parse(text); } catch (_) { return null; }
-}
-function testUnavailable(result) {
-  const body = (result.text || '').toLowerCase();
-  return result.response.status === 400 && (body.indexOf('not available') >= 0 || body.indexOf('unavailable') >= 0 || body.indexOf('unsupported') >= 0);
-}
-async function testRequest(method, path, body, timeoutMs) {
-  if (apiTestStopped) throw new Error('тест остановлен');
-  const controller = new AbortController();
-  const timer = setTimeout(function () { controller.abort(); }, timeoutMs || 5000);
-  const options = { method:method, signal:controller.signal, headers:{} };
-  if (body !== undefined) {
-    options.headers['content-type'] = 'application/json';
-    options.body = JSON.stringify(body);
+  let bodyStr='';
+  const bmode=ep.dataset.bmode;
+  if(bmode==='bool'){
+    const cb=ep.querySelector('.ep-bool');
+    bodyStr=JSON.stringify({[cb.dataset.key]:cb.checked});
+  }else if(bmode==='single'){
+    const inp=ep.querySelector('.ep-single');
+    const key=inp.dataset.key,vt=inp.dataset.vtype,raw=inp.value;
+    let val=raw;
+    if(vt==='number')val=Number(raw);
+    else if(vt==='json_val'){
+      const p=testJson(raw);
+      if(p===null){toast('Некорректный формат значения для '+key,'bad');return}
+      val=p;
+    }
+    bodyStr=JSON.stringify({[key]:val});
+  }else if(bmode==='json'){
+    const ta=ep.querySelector('.body');
+    bodyStr=ta?ta.value.trim():'';
   }
-  testLog('▶ ' + method + ' /api' + path);
-  try {
-    const result = await fetchApi(path, options);
-    const parsed = testJson(result.text);
-    const compact = parsed ? JSON.stringify(parsed) : (result.text || 'OK');
-    if (result.response.ok) testLog('✓ ' + result.response.status + ' ' + compact.slice(0, 240));
-    else if (testUnavailable(result)) testLog('↷ ' + result.response.status + ' функция недоступна на этой станции');
-    else testLog('✗ ' + result.response.status + ' ' + compact.slice(0, 240));
+
+  const res=ep.querySelector('.res'),meta=ep.querySelector('.meta'),btn=ep.querySelector('.send'),st=ep.querySelector('.st');
+  const o={method:ep.dataset.m,headers:{}};
+  if(path.indexOf('/runtime/')===0){const t=$('#runtime-token').value.trim();if(t)o.headers['X-Luna-Token']=t}
+  if(bodyStr){o.headers['content-type']='application/json';o.body=bodyStr}
+  btn.disabled=true;res.hidden=false;res.className='res';res.textContent='Отправка…';const t0=performance.now();
+  try{
+    const r=await fetchApi(path,o),ok=r.response.ok,ms=Math.round(performance.now()-t0);
+    res.className='res '+(ok?'ok':'bad');res.textContent=pretty(r.text);
+    meta.innerHTML='<b class="'+(ok?'ok':'bad')+'">'+r.response.status+'</b> · '+ms+' мс';
+    st.className='st '+(ok?'ok':'bad');st.textContent=r.response.status;
+    if(ok&&ep.dataset.tpl)refreshPluginIds();
+  }catch(e){res.className='res bad';res.textContent=e.message;meta.textContent='ошибка сети';st.className='st bad';st.textContent='✗'}
+  finally{btn.disabled=false}
+}
+
+$('#eps').addEventListener('click',e=>{
+  const h=e.target.closest('.ep-h'),s=e.target.closest('.send');
+  if(h){const ep=h.parentElement,o=ep.classList.toggle('open');h.setAttribute('aria-expanded',o)}
+  else if(s)sendEndpoint(s.closest('.ep'));
+});
+$('#eps').addEventListener('change',e=>{
+  if(e.target.classList.contains('ep-plugin-select')){
+    syncPluginPath(e.target.closest('.ep'));
+  }else if(e.target.classList.contains('ep-bool')){
+    const st=e.target.closest('.toggle-row').querySelector('.toggle-state');
+    if(st)st.textContent=e.target.checked?'true (ON)':'false (OFF)';
+  }
+});
+$('#eps').addEventListener('keydown',e=>{if(e.key==='Enter'&&(e.metaKey||e.ctrlKey)&&e.target.closest('.ep'))sendEndpoint(e.target.closest('.ep'))});
+$('#endpoint-tabs').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;epCat=b.dataset.c;$$('#endpoint-tabs button').forEach(x=>x.classList.toggle('on',x===b));filterEp()});
+$('#endpoint-search').addEventListener('input',filterEp);
+
+/* ---------- тест API ---------- */
+let apiTestStopped=false,apiTestRunning=false;const cnt={ok:0,bad:0,skip:0};
+const apiTestLog=$('#tlog'),apiTestStart=$('#api-test-start'),apiTestStop=$('#api-test-stop');
+function counts(){$('#c-ok').textContent='Успешно: '+cnt.ok;$('#c-bad').textContent='Ошибки: '+cnt.bad;$('#c-skip').textContent='Пропущено: '+cnt.skip}
+function testLog(message){
+  if(apiTestLog.firstElementChild&&apiTestLog.firstElementChild.classList.contains('empty'))apiTestLog.innerHTML='';
+  const k={'▶':'req','✓':'ok','✗':'bad','↷':'skip','—':'skip','…':'wait'}[message[0]]||'info';
+  if(cnt[k]!==undefined){cnt[k]++;counts()}
+  const li=document.createElement('li');li.className=k;li.innerHTML='<time>'+new Date().toLocaleTimeString()+'</time><span>'+esc(message)+'</span>';
+  apiTestLog.append(li);apiTestLog.scrollTop=apiTestLog.scrollHeight;
+}
+function testSleep(ms){return new Promise(r=>setTimeout(r,ms))}
+function testUnavailable(r){const b=(r.text||'').toLowerCase();return r.response.status===400&&(b.indexOf('not available')>=0||b.indexOf('unavailable')>=0||b.indexOf('unsupported')>=0)}
+async function testRequest(method,path,body,timeoutMs){
+  if(apiTestStopped)throw new Error('тест остановлен');
+  const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),timeoutMs||5000);
+  const options={method:method,signal:controller.signal,headers:{}};
+  if(body!==undefined){options.headers['content-type']='application/json';options.body=JSON.stringify(body)}
+  testLog('▶ '+method+' /api'+path);
+  try{
+    const result=await fetchApi(path,options);const parsed=testJson(result.text);const compact=parsed?JSON.stringify(parsed):(result.text||'OK');
+    if(result.response.ok)testLog('✓ '+result.response.status+' '+compact.slice(0,240));
+    else if(testUnavailable(result))testLog('↷ '+result.response.status+' функция недоступна на этой станции');
+    else testLog('✗ '+result.response.status+' '+compact.slice(0,240));
     return result;
-  } catch (error) {
-    if (error.name === 'AbortError') testLog('↷ таймаут: endpoint ожидает событие или ответ станции');
-    else testLog('✗ ' + error.message);
+  }catch(error){
+    if(error.name==='AbortError')testLog('↷ таймаут: endpoint ожидает событие или ответ станции');else testLog('✗ '+error.message);
     return null;
-  } finally { clearTimeout(timer); }
+  }finally{clearTimeout(timer)}
 }
-async function testPause(label) {
-  testLog('… пауза 3 секунды: ' + label);
-  await testSleep(3000);
+async function testPause(label){testLog('… пауза 3 секунды: '+label);await testSleep(3000)}
+async function testLed(path,offPath,body){
+  const r=await testRequest('POST',path,body,5000);
+  if(r&&(r.response.ok||testUnavailable(r))){await testPause(path);await testRequest('POST',offPath,undefined,5000)}
 }
-async function testLed(path, offPath, body) {
-  const result = await testRequest('POST', path, body, 5000);
-  if (result && (result.response.ok || testUnavailable(result))) {
-    await testPause(path);
-    await testRequest('POST', offPath, undefined, 5000);
-  }
+async function testClock(path,body){
+  const r=await testRequest('POST',path,body,7000);
+  if(r&&(r.response.ok||testUnavailable(r))){await testPause(path);await testRequest('POST','/clock/off',undefined,5000)}
 }
-async function testClock(path, body) {
-  const result = await testRequest('POST', path, body, 7000);
-  if (result && (result.response.ok || testUnavailable(result))) {
-    await testPause(path);
-    await testRequest('POST', '/clock/off', undefined, 5000);
-  }
+async function testAudio(){
+  const r=await testRequest('POST','/audio/test',undefined,7000);
+  if(r&&r.response.ok){testLog('… ждём завершения аудиофрагмента: 4 секунды');await testSleep(4500)}
 }
-async function testAudio() {
-  const result = await testRequest('POST', '/audio/test', undefined, 7000);
-  if (result && result.response.ok) {
-    testLog('… ждём завершения аудиофрагмента: 4 секунды');
-    await testSleep(4500);
-  }
-}
-function testSkip(path, reason) { testLog('— ' + path + ': пропущено (' + reason + ')'); }
-async function runApiTest() {
-  if (apiTestRunning) return;
-  apiTestRunning = true;
-  apiTestStopped = false;
-  apiTestStart.disabled = true;
-  apiTestStop.disabled = false;
-  apiTestLog.className = 'response test-running';
-  apiTestLog.textContent = '';
+function testSkip(path,reason){testLog('— '+path+': пропущено ('+reason+')')}
+async function runApiTest(){
+  if(apiTestRunning)return;
+  apiTestRunning=true;apiTestStopped=false;apiTestStart.disabled=true;apiTestStop.disabled=false;
+  $('#tbar').classList.add('on');apiTestLog.innerHTML='';cnt.ok=cnt.bad=cnt.skip=0;counts();
   testLog('Начинаю проверку API');
-  try {
-    const deviceResult = await testRequest('GET', '/device', undefined, 5000);
-    let device = deviceResult && testJson(deviceResult.text);
-    await testRequest('GET', '/settings', undefined, 5000);
-    await testRequest('GET', '/room', undefined, 5000);
-    await testRequest('GET', '/sensors', undefined, 5000);
-    await testRequest('GET', '/media', undefined, 5000);
-    await testRequest('GET', '/volume', undefined, 5000);
-    await testRequest('GET', '/bluetooth/status', undefined, 5000);
-    await testRequest('GET', '/clock', undefined, 5000);
-    await testRequest('GET', '/input/devices', undefined, 5000);
-    await testRequest('GET', '/microphone/devices', undefined, 5000);
-    await testRequest('GET', '/lua/files', undefined, 5000);
-    await testRequest('GET', '/plugins', undefined, 5000);
-    await testRequest('GET', '/plugins/sources', undefined, 5000);
-
-    const led = device && device.led ? device.led : {};
-    if (led.has_ring || Number(led.ring_count) > 0) await testLed('/led/ring', '/led/off/ring', {colors:['#0000FF']});
-    else testSkip('/led/ring и /led/off/ring', 'ring отсутствует');
-    if (led.has_logo || Number(led.logo_count) > 0) await testLed('/led/logo', '/led/off/logo', {colors:['#00FF00']});
-    else testSkip('/led/logo и /led/off/logo', 'logo отсутствует');
-    if (led.has_ring || led.has_logo || Number(led.ring_count) > 0 || Number(led.logo_count) > 0) await testLed('/led', '/led/off', {colors:['#FF0000']});
-    else testSkip('/led и /led/off', 'LED отсутствуют');
-
-    const features = device && Array.isArray(device.features) ? device.features : [];
-    if (features.some(function (item) { return String(item).indexOf('audio.play.') === 0; })) {
-      await testAudio();
-    } else {
-      testSkip('/audio/test', 'аудио отсутствует');
-    }
-
-    const clock = device && (device.clock || device.features || []);
-    if (device && (device.clock || (Array.isArray(clock) && clock.some(function (item) { return String(item).indexOf('clock') >= 0; })))) {
-      await testClock('/clock', {time:'12:34', brightness:80});
-      await testClock('/clock/text', {text:'LUNA', duration_ms:1000, brightness:80});
-    } else {
-      testSkip('/clock, /clock/text и /clock/off', 'часы отсутствуют');
-    }
-
-    testSkip('/volume/up, /volume/down, /volume/mute, /volume/unmute', 'изменяют громкость станции');
-    testSkip('/bluetooth/power, /bluetooth/pairable, /bluetooth/scan и /bluetooth/*', 'управляют радио или внешними устройствами');
-    testSkip('/media/select и /media/command', 'управляют воспроизведением');
-    testSkip('/input/event, /input/events, /input/gpio/* и /input/*', 'ждут физическое действие пользователя');
-    testSkip('/alice/command, /alice/speech и /alice/recognize', 'ждут речь и могут передать команду штатной Алисе');
-    testSkip('/alice/speech/cancel', 'управляет текущим диалогом штатной Алисы');
-    testSkip('/microphone/record', 'записывает звук и возвращает файл');
-    testSkip('/volume POST, /device PUT, /room PUT и /settings PUT', 'изменяют состояние станции или конфигурацию');
-    testSkip('/lua/run, /lua/:id/stop и /plugins POST/*', 'изменяют состояние или запускают пользовательский код');
-    testSkip('/runtime/:id/*', 'требуют токен конкретного плагина');
+  try{
+    const deviceResult=await testRequest('GET','/device',undefined,5000);
+    const device=deviceResult&&testJson(deviceResult.text);
+    for(const p of ['/settings','/room','/sensors','/media','/volume','/bluetooth/status','/clock','/input/devices','/microphone/devices','/lua/files','/plugins','/plugins/sources'])await testRequest('GET',p,undefined,5000);
+    const led=device&&device.led?device.led:(device||{});
+    if(led.has_ring||Number(led.ring_count)>0)await testLed('/led/ring','/led/off/ring',{colors:['#0000FF']});else testSkip('/led/ring и /led/off/ring','ring отсутствует');
+    if(led.has_logo||Number(led.logo_count)>0)await testLed('/led/logo','/led/off/logo',{colors:['#00FF00']});else testSkip('/led/logo и /led/off/logo','logo отсутствует');
+    if(led.has_ring||led.has_logo||Number(led.ring_count)>0||Number(led.logo_count)>0)await testLed('/led','/led/off',{colors:['#FF0000']});else testSkip('/led и /led/off','LED отсутствуют');
+    const features=device&&Array.isArray(device.features)?device.features:[];
+    if(features.some(i=>String(i).indexOf('audio.play.')===0))await testAudio();else testSkip('/audio/test','аудио отсутствует');
+    const clock=device&&(device.clock||device.features||[]);
+    if(device&&(device.clock||(Array.isArray(clock)&&clock.some(i=>String(i).indexOf('clock')>=0)))){
+      await testClock('/clock',{time:'12:34',brightness:80});await testClock('/clock/text',{text:'LUNA',duration_ms:1000,brightness:80});
+    }else testSkip('/clock, /clock/text и /clock/off','часы отсутствуют');
+    testSkip('/volume/up, /volume/down, /volume/mute, /volume/unmute','изменяют громкость станции');
+    testSkip('/bluetooth/power, /bluetooth/pairable, /bluetooth/scan и /bluetooth/*','управляют радио или внешними устройствами');
+    testSkip('/media/select и /media/command','управляют воспроизведением');
+    testSkip('/input/event, /input/events, /input/gpio/* и /input/*','ждут физическое действие пользователя');
+    testSkip('/alice/command, /alice/speech и /alice/recognize','ждут речь и могут передать команду штатной Алисе');
+    testSkip('/alice/speech/cancel','управляет текущим диалогом штатной Алисы');
+    testSkip('/microphone/record','записывает звук и возвращает файл');
+    testSkip('/volume POST, /device PUT, /room PUT и /settings PUT','изменяют состояние станции или конфигурацию');
+    testSkip('/lua/run, /lua/:id/stop и /plugins POST/*','изменяют состояние или запускают пользовательский код');
+    testSkip('/runtime/:id/*','требуют токен конкретного плагина');
     testLog('Проверка завершена');
-  } catch (error) {
-    if (error.message !== 'тест остановлен') testLog('✗ критическая ошибка: ' + error.message);
-    else testLog('Остановлено пользователем');
-  } finally {
-    apiTestRunning = false;
-    apiTestStart.disabled = false;
-    apiTestStop.disabled = true;
-    apiTestLog.className = 'response';
-  }
+  }catch(error){
+    if(error.message!=='тест остановлен')testLog('✗ критическая ошибка: '+error.message);else testLog('Остановлено пользователем');
+  }finally{apiTestRunning=false;apiTestStart.disabled=false;apiTestStop.disabled=true;$('#tbar').classList.remove('on')}
 }
-function stopApiTest() { if (apiTestRunning) { apiTestStopped = true; testLog('Останавливаю после текущего запроса…'); } }
-let selectedWebTab = 'luna';
-const webTabs = document.getElementById('web-tabs');
-const customWebPanel = document.getElementById('custom-web-panel');
-const customWebFrame = document.getElementById('custom-web-frame');
-const customWebEmpty = document.getElementById('custom-web-empty');
-function selectWebTab(tab, button) {
-  selectedWebTab = tab;
-  document.querySelectorAll('#web-tabs button').forEach(function (item) { item.classList.toggle('active', item === button || item.dataset.tab === tab); });
-  document.querySelectorAll('body > section').forEach(function (section) {
-    if (section.id === 'custom-web-panel') section.style.display = tab === 'luna' ? 'none' : 'block';
-    else section.style.display = tab === 'luna' ? '' : 'none';
-  });
-  if (tab !== 'luna') {
-    const customButton = document.querySelector('#web-tabs button[data-tab="' + CSS.escape(tab) + '"]');
-    const url = customButton && customButton.dataset.url;
-    if (url) { customWebEmpty.style.display = 'none'; customWebFrame.src = url; }
-  }
-}
-async function refreshCustomWebTabs() {
-  try {
-    const result = await fetchApi('/custom-web');
-    if (!result.response.ok) return;
-    const pages = testJson(result.text) || [];
-    webTabs.querySelectorAll('.tab-plugin').forEach(function (button) { button.remove(); });
-    pages.forEach(function (page) {
-      const button = document.createElement('button');
-      button.className = 'tab-plugin';
-      button.dataset.tab = page.id;
-      button.dataset.url = page.url;
-      button.textContent = page.id;
-      button.title = 'Веб-интерфейс ' + page.id;
-      button.onclick = function () { selectWebTab(page.id, button); };
-      webTabs.appendChild(button);
-    });
-    if (selectedWebTab !== 'luna' && !pages.some(function (page) { return page.id === selectedWebTab; })) {
-      selectWebTab('luna', webTabs.querySelector('[data-tab="luna"]'));
-    }
-  } catch (_) { /* API may be unavailable while Luna is starting */ }
-}
-sendDevice();
-loadRoom();
-loadSettings();
-refreshCustomWebTabs();
-setupEndpointNavigation();
-applyTheme(localStorage.getItem('luna-theme') || 'dark');
-setInterval(refreshCustomWebTabs, 5000);
+function stopApiTest(){if(apiTestRunning){apiTestStopped=true;testLog('Останавливаю после текущего запроса…')}}
+apiTestStart.onclick=runApiTest;apiTestStop.onclick=stopApiTest;
+$('#t-copy').onclick=()=>{const t=$$('#tlog li:not(.empty)').map(l=>l.textContent).join('\n');if(!t)return toast('Лог пуст');
+  (navigator.clipboard?navigator.clipboard.writeText(t):Promise.reject()).then(()=>toast('Лог скопирован'),()=>toast('Не удалось скопировать','bad'))};
+
+/* ---------- запуск ---------- */
+function refreshPageData(){sendDevice();loadRoom();if(isDirty())toast('Настройки не перезагружены: есть несохранённые изменения');else loadSettings();refreshCustomWebTabs();refreshPluginIds()}
+$('#refresh').onclick=refreshPageData;
+$('#theme').onclick=()=>applyTheme(document.documentElement.dataset.theme==='dark'?'light':'dark');
+applyTheme(document.documentElement.dataset.theme);
+buildLedCanvas({ring_count:6,has_logo:true,logo_count:1});drawSwatches();buildEndpoints();route();
+sendDevice();loadRoom();loadSettings();refreshCustomWebTabs();refreshPluginIds();
+setInterval(()=>{refreshCustomWebTabs();refreshPluginIds()},5000);
 </script>
 </body>
 </html>
