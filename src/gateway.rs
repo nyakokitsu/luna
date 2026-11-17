@@ -6410,7 +6410,6 @@ pub async fn run_with_station(station: Option<StationSpec>) -> Result<()> {
     if web.ui {
         router = router
             .route("/", get(index))
-            .route("/calibration", get(led_panel::page))
             .route("/web/:id", get(custom_web));
     }
     if web.api {

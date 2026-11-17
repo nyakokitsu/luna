@@ -1,9 +1,13 @@
 # Generic Luna LED calibration
 
-`/calibration` is a native Luna LED tool, independent of any music plugin.
-It uses Luna's existing web listener and browser guard; mutations additionally
-require `X-Luna-Local: 1`. There is no shell execution, extra listener, token
-extraction, plugin command transport, timing control or EQ.
+The standalone `/calibration` web page has been removed from Luna. Colour
+controls belonging to a music plugin should live in that plugin's own panel,
+not in a second built-in Luna tab. The old page URL is no longer registered.
+
+This is a UI removal, not a reset of LED settings. Stock model profiles,
+`led.calibration_gain`, logical RGB/channel order, runtime LED APIs and the
+guarded LED-panel HTTP API below remain unchanged. Existing settings and
+presets are preserved; no device files are removed by this change.
 
 ## Contract
 
@@ -16,11 +20,6 @@ extraction, plugin command transport, timing control or EQ.
 - `GET/PUT /api/led-panel/presets`: at most 16 named RGB-gain objects, 16 KiB.
   Stored separately in `led-calibration-presets.json`; no paths/commands/audio
   configuration are accepted.
-
-The browser supports solid/RGB/white/grey/off patterns, HEX, ring/logo selection,
-gain preview, explicit save/reload/reset, named presets and JSON import/export.
-It never starts preview automatically. Loading/importing a preset changes
-only the form; explicit Save is required to persist gains.
 
 ## Ownership and limitations
 
@@ -48,11 +47,8 @@ all station wrappers can compile with the existing interface.
 Rust checks cover gain/preset HTTP validation, persistence without changing
 binary-execution opt-in, body limits, session ownership/frame validation,
 topology discovery, single gain application and fail-closed observer gating.
-Browser fixtures are software tests, not proof of physical colour accuracy.
+The standalone page and its browser-only mock fixture have been removed;
+API/backend tests remain.
 
-This isolated replacement has not been deployed to hardware. Earlier combined
-panel experiments are not qualification of this new standalone page.
-Physical colour accuracy, assistant/volume handover and backend restoration
-across firmware families still require qualification; keep the PR draft.
-The existing upstream Lite2 firmware assertion is unrelated and must be
-reported separately rather than hidden as a passing full suite.
+Removing this page does not fix AirPlay startup errors or change physical
+colour calibration on any station.
