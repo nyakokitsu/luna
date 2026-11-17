@@ -1,10 +1,6 @@
 //! Generic Luna LED calibration and preview, without plugin-specific transport.
 use super::*;
 
-pub(super) async fn page() -> Html<&'static str> {
-    Html(include_str!("../web/led-calibration.html"))
-}
-
 fn valid_presets(presets: &BTreeMap<String, GainRequest>) -> bool {
     presets.len() <= 16
         && presets.iter().all(|(name, gain)| {
@@ -644,17 +640,20 @@ mod tests {
     }
 
     #[test]
-    fn page_has_no_plugin_specific_transport_or_audio_controls() {
-        let page = include_str!("../web/led-calibration.html");
-        assert!(page.contains("/api/led-panel/"));
-        for forbidden in [
-            "/api/airplay",
-            "panel-command",
-            "equalizer",
-            "timing_mode",
-            "spectrum_",
+    fn standalone_calibration_page_is_not_registered_or_bundled() {
+        let gateway = include_str!("gateway.rs");
+        assert!(!gateway.contains(".route(\"/calibration\""));
+        assert!(!std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("web/led-calibration.html")
+            .exists());
+        // Removing the standalone UI must not remove the API used by clients.
+        for route in [
+            "/api/led-panel/status",
+            "/api/led-panel/settings",
+            "/api/led-panel/preview",
+            "/api/led-panel/presets",
         ] {
-            assert!(!page.contains(forbidden), "{forbidden}");
+            assert!(gateway.contains(route), "{route}");
         }
     }
 
