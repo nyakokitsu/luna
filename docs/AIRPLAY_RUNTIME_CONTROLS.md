@@ -1,60 +1,81 @@
-# Add permission-scoped native controls and bounded station-volume I/O
+# AirPlay: управление плеером, команды и громкость
 
-## Summary
+> Пауза и освобождение нативного плеера, ожидание команды Алисы и работа с
+> громкостью получили отдельные эндпоинты с проверкой прав и жёсткими
+> таймаутами. Штатный CLI запускается в ограниченном воркере.
 
-- Add token/permission-scoped native-player pause/release endpoints, separate
-  from the media-provider broker, so native handover cannot target AirPlay itself.
-- Run the stock CLI in a bounded worker with ownership, queue/deadline checks,
-  finite session lease and process-group cleanup. Queue/startup share one
-  absolute request deadline; expired requests do not submit a late pause.
-- Add a narrow KEY_ALICE long-poll endpoint with independent event-reader
-  fan-out, fresh invocation readers and permission checks before AND after wait.
-- Reuse parsed manifests only after content hashing; retain token revocation
-  and per-request permission validation.
-- Isolate volume backend I/O from async workers, bound helper output/time,
-  serialize actual operations even after caller cancellation, and coalesce
-  only concurrent in-flight reads. Do not cache completed volume answers.
+## Что изменилось
 
-## Public v0.2.23 preserved
+- Появились эндпоинты паузы и освобождения нативного плеера, привязанные к
+  токену и праву `media.native`. Они отделены от брокера медиапровайдеров,
+  поэтому передача управления не может случайно адресовать сам AirPlay.
+- Штатный CLI работает в ограниченном воркере: владение, проверки очереди и
+  дедлайна, конечная аренда сессии и очистка группы процессов. Постановка в
+  очередь и запуск делят один абсолютный дедлайн: просроченный запрос не
+  отправляет запоздалую паузу.
+- Ожидание `KEY_ALICE` вынесено в отдельный long-poll с независимым читателем
+  событий, свежими читателями на вызов и проверкой права до и после ожидания.
+- Разобранные манифесты переиспользуются только после сверки хеша содержимого;
+  отзыв токена и проверка прав по каждому запросу сохранены.
+- Ввод-вывод громкости изолирован от асинхронных воркеров: вывод и время
+  помощника ограничены, реальные операции сериализуются даже после отмены
+  вызова, объединяются только одновременные незавершённые чтения. Готовые
+  ответы громкости не кэшируются.
 
-Ported onto the exact public v0.2.23 commit
-b6ddd7f4e70f985256d01343899697a076f6ce05, not an older fork with matching
-version text. Public src/audio.rs, src/audio_jobs.rs, src/owner.rs and src/lib.rs
-are byte-identical to the tag. Audio/owner routes, cancellable playback and
-graceful audio-job shutdown remain wired in gateway.rs.
+## Сохранённая база
 
-## Contract
+Изменение портировано на публичный коммит v0.2.23
+`b6ddd7f4e70f985256d01343899697a076f6ce05`, а не на старый форк с тем же
+номером версии. Публичные `src/audio.rs`, `src/audio_jobs.rs`, `src/owner.rs` и
+`src/lib.rs` совпадают с тегом побайтно. Маршруты audio/owner, отменяемое
+воспроизведение и корректная остановка аудио-задач остаются подключёнными в
+`gateway.rs`.
 
-- POST /api/runtime/:id/native-player/pause (media.native).
-- POST /api/runtime/:id/native-player/release (media.native).
-- POST /api/runtime/:id/input/alice/next (input.alice).
-- Capabilities advertised through existing runtime media endpoint.
-- Native pause reports submission, NOT independently verified audible pause.
-- No raw speech, vendor CLI output or runtime credentials added to diagnostics.
-- No broad input permission, EVIOCGRAB, provider redirection or weakened package
-  validation, permission validation, filesystem or readback checks.
+## Контракт
 
-## Explicitly out of scope
+| Эндпоинт | Право | Что делает |
+| :-- | :-- | :-- |
+| `POST /api/runtime/:id/native-player/pause` | `media.native` | ставит паузу в очередь с дедлайном |
+| `POST /api/runtime/:id/native-player/release` | `media.native` | освобождает нативное владение |
+| `POST /api/runtime/:id/input/alice/next` | `input.alice` | ждёт событие `KEY_ALICE` |
 
-No LED/framebuffer/colour/brightness changes. No public version bump, build
-assets, release, registry update, firmware image or live deployment.
+Возможности объявляются через существующий runtime-эндпоинт медиа. Пауза
+подтверждает **постановку запроса**, а не слышимую остановку звука. В
+диагностику не попадают сырая речь, вывод вендорного CLI и runtime-токены.
+Право `input` целиком не расширяется, `EVIOCGRAB` не используется,
+перенаправление провайдеров и ослабление проверок пакетов, прав, файловой
+системы и чтения состояния не добавляются.
 
-## Validation
+## Что осталось за рамками
 
-- Full cargo test --locked --offline --workspace: PASS (135 passed, 1 ignored; peak 61 C; cleanup confirmed).
-- Public audio/owner source and gateway integration preservation: checked.
-- Exact rebased emulator lifecycle, live button/voice/playback, performance
-  improvement and hardware support beyond unit tests: NOT_RUN / not claimed.
-- Historical tests of older local branches do not qualify this port. Earlier
-  FAIL/NOT_RUN outcomes and two-mode CPU observations are preserved separately.
+Нет изменений LED, framebuffer, цвета и яркости. Нет повышения публичной
+версии, ассетов сборки, релиза, обновления реестра, образа прошивки и живой
+раскатки.
 
-## Merge / release order
+## Проверка
 
-Land and release the Luna API first; then publish the companion AirPlay
-adapter with generated package metadata requiring that new Luna release.
-Public v0.2.23 alone is not an adequate API dependency.
+- `cargo test --locked --offline --workspace`: пройдено (135 тестов, 1
+  пропущен; пик 61 °C; очистка процессов подтверждена).
+- Побайтное сохранение публичных audio/owner-исходников и интеграции в
+  `gateway.rs`: проверено.
+- Точный жизненный цикл на эмуляторе, живые кнопки/голос/воспроизведение,
+  выигрыш по производительности и поддержка сверх unit-тестов: **не
+  запускалось** и не заявляется.
+- Результаты старых локальных веток этот порт не квалифицируют: прежние
+  FAIL/NOT_RUN и наблюдения CPU в двух режимах сохранены отдельно.
 
-## Submission status
+## Порядок слияния и релиза
 
-Submitted as https://github.com/nyakokitsu/luna/pull/29 from the ryysel fork.
-The companion AirPlay PR is not submitted yet.
+Сначала выходит API Luna, затем публикуется совместимый адаптер AirPlay с
+метаданными пакета, требующими этой версии Luna. Одного v0.2.23 как зависимости
+недостаточно.
+
+## Статус
+
+Отправлено как [PR #29](https://github.com/nyakokitsu/luna/pull/29) из форка
+`ryysel`. Парный PR адаптера AirPlay пока не отправлен.
+
+## См. также
+
+- [MEDIA_PROVIDERS.md](MEDIA_PROVIDERS.md) — как устроены медиапровайдеры.
+- [API.md](API.md) — runtime-раздел и громкость.

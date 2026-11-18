@@ -1,63 +1,73 @@
-# YAM package-owned plugin bundles and Lua pages
+# Несколько плагинов в одном пакете YAM
 
-One YAM package may own several Luna plugins in its namespace.
-For example, `example/bundle` can ship:
+> Один пакет YAM может владеть несколькими плагинами Luna. У каждого свои права
+> и жизненный цикл, но общий владелец, версия и транзакция обновления.
 
-```
+Пример: пакет `example/bundle` поставляет три плагина:
+
+```text
 share/luna/plugins/example.receiver/plugin.toml
 share/luna/plugins/example.command/plugin.toml
 share/luna/plugins/example.page/plugin.toml
 ```
 
-They keep separate permissions, enable/service flags and process lifecycles,
-but their files have one package owner, selected version and update/removal
-transaction. This is a host capability, not a change to YAM's package format.
-There is no plugin-specific API, bundled web page or new network listener.
+У них раздельные permissions, флаги enable/service и процессы, но один владелец
+файлов, одна выбранная версия и одна транзакция обновления или удаления. Это
+возможность хоста Luna, а не изменение формата пакетов YAM: отдельного API для
+плагинов, встроенной веб-страницы и нового сетевого слушателя не появляется.
 
-## Verified ownership
+## Как проверяется владение
 
-Luna resolves the descriptor to the canonical immutable payload:
+Luna разрешает дескриптор в канонический неизменяемый payload:
 
-```
+```text
 $YAM_ROOT/pkgs/<namespace>/<package>/<version>/share/luna/plugins/<plugin-id>/plugin.toml
 ```
 
-It verifies exact layout, matching plugin ID and namespace, a real plugin root,
-the selected package version and descriptor ownership. Launchers, entries and
-private libraries must still stay inside their plugin root. A descriptor from
-a different version or namespace is rejected.
+Проверяются точная раскладка, совпадение plugin ID и namespace, реальный корень
+плагина, выбранная версия пакета и принадлежность дескриптора. Launcher, entry и
+приватные библиотеки по-прежнему обязаны оставаться внутри корня плагина.
+Дескриптор из другой версии или другого namespace отклоняется.
 
-The API package field and removal hint use that verified owner; they no longer
-guess the package name by replacing the dot in each component's plugin ID.
-Existing one-plugin packages keep working without manifest changes.
+Поле `package` в ответе API и подсказка при удалении берут проверенного
+владельца, а не угадывают имя пакета заменой точки в ID компонента. Существующие
+пакеты с одним плагином продолжают работать без правки manifest.
 
-## Lua lifetime and web pages
+## Lua и веб-страницы
 
-YAM Lua plugins acquire a shared transaction lease and use the selected payload
-root for execution and register.customweb. The lease lasts for the service's
-whole lifetime. Pages therefore work through normal YAM file links without
-copying HTML into local plugin storage or weakening HTTP path containment.
-Stopping/failing Lua releases its lease and unregisters the page.
+Lua-плагин из YAM берёт общую транзакционную аренду и использует выбранный
+payload как корень выполнения и для `register.customweb`. Аренда живёт всё время
+работы сервиса, поэтому страница работает через обычные файловые ссылки YAM:
+копировать HTML в локальное хранилище плагина и ослаблять проверку путей HTTP не
+нужно. Остановка или падение Lua освобождает аренду и снимает страницу.
 
-Stop Lua services as well as binary plugins before YAM transactions. Do not
-delete yam.lock. Local .yap plugins remain supported. No web/exec/admin permission
-is automatically granted; existing enable and binary-execution checks remain.
+Перед транзакциями YAM останавливайте и Lua-сервисы, и бинарные плагины. Не
+удаляйте `yam.lock`. Локальные `.yap`-плагины поддерживаются как раньше.
+Права `web`, `exec` и админские автоматически не выдаются: проверки enable и
+запуска бинарников остаются в силе.
 
-## Validation
+## Проверка
 
-Tests cover a binary component owned by a differently named bundle, a Lua page
-in the same package as a binary component, actual HTML serving, successive
-versions, page cleanup, transaction exclusion, foreign descriptors,
-entry/current escapes, namespace rejection and existing runtime authorization.
+Тесты покрывают бинарный компонент во владении бандла с другим именем, Lua-страницу
+в одном пакете с бинарным компонентом, реальную выдачу HTML, последовательные
+версии, очистку страницы, исключение транзакций, чужие дескрипторы, выходы
+entry/current за пределы корня, отказ по namespace и существующую авторизацию
+runtime.
 
-The matching host change was also exercised with a private companion bundle in
-full-system emulation: migration from a split companion, upgrade, corrupt input
-rejection, removal and reinstall. Four physical bench units were updated; three
-had manual cold-boot checks and one had normal reboot checks after installation.
-That validates the package-hosting path, not independent LED calibration or
-audio/colour quality.
+Изменение хоста проверено и приватным companion-бандлом в полной эмуляции
+системы: миграция с раздельного companion, обновление, отказ на испорченных
+данных, удаление и повторная установка. Четыре физические станции обновлены:
+три с ручной проверкой холодной загрузки, одна с обычной перезагрузкой после
+установки. Это подтверждает путь хостинга пакетов, но не калибровку LED и не
+качество звука или цвета.
 
-On the current upstream v0.2.26 baseline, the Lite2 firmware assertion fails
-unchanged; Station Max also lacks its StationSpec.led_calibration initializer.
-Report these separately when running broad/workspace tests. This change does
-not alter firmware validation or station hardware implementations.
+На текущей базе upstream v0.2.26 проверка прошивки Lite2 падает без изменений,
+а Station Max всё ещё без инициализатора `StationSpec.led_calibration`. Сообщайте
+об этом отдельно при широких прогонах workspace: эта правка не меняет проверку
+прошивок и реализации железа станций.
+
+## См. также
+
+- [PLUGINS.md](PLUGINS.md) — как устроены плагины Luna.
+- [PACKAGE_GUIDE.md](PACKAGE_GUIDE.md) — manifest и структура пакета.
+- [API.md](API.md) — пакеты и их эндпоинты.

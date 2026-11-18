@@ -30,6 +30,7 @@ use std::{
 };
 use tokio::{net::TcpListener, sync::Mutex, task};
 use tower_http::trace::TraceLayer;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 use url::Url;
 use uuid::Uuid;
 
@@ -85,6 +86,12 @@ enum RuntimeCommand {
         value: Option<String>,
         #[arg(long, conflicts_with = "value")]
         clear: bool,
+    },
+    /// Record the owner's anonymous-statistics answer without starting the
+    /// runtime; the installer runs this so the panel never asks twice.
+    Telemetry {
+        /// `on`, `off` or `show`.
+        choice: String,
     },
 }
 
@@ -955,6 +962,8 @@ struct PluginInfo {
 #[derive(Clone)]
 struct App {
     root: PathBuf,
+    started: Instant,
+    diagnostics: crate::telemetry::Counters,
     settings: Arc<Mutex<Settings>>,
     device: Arc<Mutex<DeviceProfile>>,
     led: Arc<Led>,
@@ -5513,6 +5522,60 @@ async fn runtime_clock_off(
 async fn get_settings(State(a): State<App>) -> Json<Settings> {
     Json(a.settings.lock().await.clone())
 }
+
+/// The panel needs the answer, not the whole settings tree: `consent == "unset"`
+/// is what shows the first-run prompt.
+#[derive(Debug, Serialize)]
+struct TelemetryState {
+    enabled: bool,
+    consent: &'static str,
+    install_id: String,
+    endpoint: String,
+}
+
+impl TelemetryState {
+    fn from_state(state: crate::telemetry::State) -> Self {
+        Self {
+            enabled: state.enabled,
+            consent: state.consent.as_str(),
+            install_id: state.install_id,
+            endpoint: crate::telemetry::endpoint(),
+        }
+    }
+}
+
+async fn get_telemetry(State(a): State<App>) -> Json<TelemetryState> {
+    Json(TelemetryState::from_state(crate::telemetry::State::load(
+        &a.root,
+    )))
+}
+
+#[derive(Debug, Deserialize)]
+struct TelemetryRequest {
+    enabled: bool,
+}
+
+async fn put_telemetry(
+    State(a): State<App>,
+    Json(request): Json<TelemetryRequest>,
+) -> Result<Json<TelemetryState>, ApiError> {
+    let state = crate::telemetry::State::record(&a.root, request.enabled)?;
+    if state.enabled {
+        // Send the first report right away so a fresh opt-in shows up without
+        // waiting for the hourly heartbeat.
+        let app = a.clone();
+        let state = state.clone();
+        task::spawn(async move {
+            let body = telemetry_body(&app).await;
+            let result =
+                task::spawn_blocking(move || crate::telemetry::send(&state, "consent", body)).await;
+            if let Ok(Err(error)) = result {
+                tracing::warn!(%error, "anonymous statistics were not delivered");
+            }
+        });
+    }
+    Ok(Json(TelemetryState::from_state(state)))
+}
 async fn device_metadata(a: &App) -> Result<DeviceMetadata> {
     Ok(DeviceMetadata {
         profile: a.device.lock().await.clone(),
@@ -6318,27 +6381,200 @@ fn start_auto_updater(
         }
     });
 }
+/// Every field describes the station or the runtime. The room text, file names,
+/// package settings and network addresses are deliberately left out.
+async fn telemetry_body(app: &App) -> serde_json::Value {
+    let device = app.device.lock().await.clone();
+    let settings = app.settings.lock().await.clone();
+    let packages = {
+        let listed = app.device.lock().await.clone();
+        match app.plugins.lock().await.list(&listed) {
+            Ok(packages) => packages,
+            Err(error) => {
+                tracing::warn!(%error, "cannot list packages for statistics");
+                Vec::new()
+            }
+        }
+    };
+    let room_set = Room::load(&app.root)
+        .map(|room| room.room.is_some())
+        .unwrap_or(false);
+    serde_json::json!({
+        "device": {
+            "model": device.model,
+            "architecture": device.architecture,
+            "features": device.features,
+            "led": {
+                "ring_count": device.led.ring_count,
+                "has_logo": device.led.has_logo,
+                "logo_count": device.led.logo_count,
+            },
+            "room_set": room_set,
+        },
+        "settings": {
+            "allow_plugin_binaries": settings.allow_plugin_binaries,
+            "updates": {
+                "enabled": settings.updates.enabled,
+                "interval_minutes": settings.updates.interval_minutes,
+            },
+            "web": {
+                "ui": settings.web.ui,
+                "api": settings.web.api,
+                "network_enabled": settings.web.network.enabled,
+                "network_allow_count": settings.web.network.allow.len(),
+                "allow_insecure_http": settings.web.network.allow_insecure_http,
+            },
+            "lua": {
+                "enabled": settings.lua.enabled,
+                "max_runtime_seconds": settings.lua.max_runtime_seconds,
+                "allow_infinite_loops": settings.lua.allow_infinite_loops,
+                "share_dir": settings.lua.share_dir,
+                "permissions": settings.lua.permissions,
+                "network_allow_count": settings.lua.network_allow.len(),
+                "input_device_count": settings.lua.input_devices.len(),
+                "ipc_service_count": settings.lua.ipc_services.len(),
+                "command_phrase_count": settings.lua.command_phrases.len(),
+            },
+        },
+        "packages": packages
+            .iter()
+            .map(|package| serde_json::json!({
+                "id": package.manifest.id,
+                "version": package.manifest.version,
+                "enabled": package.enabled,
+                "service": package.service_enabled,
+                "running": package.running,
+                "compatible": package.compatible,
+                "source": package.source,
+            }))
+            .collect::<Vec<_>>(),
+        "counts": {
+            "packages": packages.len(),
+            "packages_enabled": packages.iter().filter(|package| package.enabled).count(),
+            "packages_running": packages.iter().filter(|package| package.running).count(),
+            "runtime_tokens": app.runtime_tokens.lock().await.len(),
+            "custom_web_pages": app.custom_web.lock().await.len(),
+            "sensors": discover_sensors().len(),
+        },
+        "health": {
+            "warnings": app.diagnostics.warnings(),
+            "errors": app.diagnostics.errors(),
+        },
+        "system": crate::telemetry::system_info(app.started),
+    })
+}
+
+/// Reports once shortly after start, then hourly while the owner keeps the
+/// consent switched on. Switching it off stops the sending immediately because
+/// the state file is re-read for every report.
+fn start_telemetry(app: App) {
+    task::spawn(async move {
+        tokio::time::sleep(crate::telemetry::STARTUP_DELAY).await;
+        let mut event = "startup";
+        loop {
+            let state = crate::telemetry::State::load(&app.root);
+            if state.enabled && !state.install_id.is_empty() {
+                let body = telemetry_body(&app).await;
+                let result =
+                    task::spawn_blocking(move || crate::telemetry::send(&state, event, body)).await;
+                match result {
+                    Ok(Ok(())) => tracing::debug!(event, "anonymous statistics sent"),
+                    Ok(Err(error)) => {
+                        tracing::warn!(%error, "anonymous statistics were not delivered")
+                    }
+                    Err(error) => tracing::warn!(%error, "anonymous statistics task failed"),
+                }
+            }
+            event = "heartbeat";
+            tokio::time::sleep(crate::telemetry::HEARTBEAT_INTERVAL).await;
+        }
+    });
+}
+
+/// `luna telemetry on|off|show`. The installer runs this so the panel can tell
+/// an answered question from a first visit.
+async fn run_telemetry_command(args: &Args, choice: &str) -> Result<()> {
+    fs::create_dir_all(&args.data_dir)?;
+    let enabled = match choice {
+        "on" | "enable" | "yes" => true,
+        "off" | "disable" | "no" => false,
+        "show" | "status" => {
+            let state = crate::telemetry::State::load(&args.data_dir);
+            println!(
+                "enabled={} consent={} install_id={}",
+                state.enabled,
+                state.consent.as_str(),
+                state.install_id
+            );
+            return Ok(());
+        }
+        other => bail!("unknown telemetry action: {other} (expected on, off or show)"),
+    };
+    let state = crate::telemetry::State::record(&args.data_dir, enabled)?;
+    println!(
+        "telemetry {} ({})",
+        if state.enabled { "enabled" } else { "disabled" },
+        state.install_id
+    );
+    if !state.enabled {
+        return Ok(());
+    }
+    let model = args.model.clone().or_else(|| {
+        fs::read_to_string(args.data_dir.join("device.toml"))
+            .ok()
+            .and_then(|raw| toml::from_str::<DeviceProfile>(&raw).ok())
+            .map(|profile| profile.model)
+    });
+    let body = serde_json::json!({
+        "source": "installer",
+        "device": { "model": model, "architecture": std::env::consts::ARCH },
+        "system": crate::telemetry::system_info(Instant::now()),
+    });
+    // The blocking client cannot live on the async runtime thread, and a
+    // collector outage must not fail an otherwise complete installation.
+    let outcome =
+        task::spawn_blocking(move || crate::telemetry::send(&state, "install", body)).await;
+    match outcome {
+        Ok(Ok(())) => println!("install statistics delivered"),
+        Ok(Err(error)) => eprintln!("warning: install statistics were not delivered: {error}"),
+        Err(error) => eprintln!("warning: install statistics task failed: {error}"),
+    }
+    Ok(())
+}
+
 pub fn run() -> Result<()> {
     run_with_station(None)
 }
 
 #[tokio::main]
 pub async fn run_with_station(station: Option<StationSpec>) -> Result<()> {
-    tracing_subscriber::fmt().with_env_filter("info").init();
-    let args = Args::parse();
-    if let Some(RuntimeCommand::Room { value, clear }) = args.command {
-        let mutating = clear || value.is_some();
-        let room = if mutating {
-            fs::create_dir_all(&args.data_dir)?;
-            Room { room: value }.normalized()?
-        } else {
-            Room::load(&args.data_dir)?
-        };
-        if mutating {
-            room.save(&args.data_dir)?;
+    let counters = crate::telemetry::Counters::default();
+    tracing_subscriber::registry()
+        .with(EnvFilter::new("info"))
+        .with(tracing_subscriber::fmt::layer())
+        .with(counters.clone())
+        .init();
+    let mut args = Args::parse();
+    match args.command.take() {
+        Some(RuntimeCommand::Room { value, clear }) => {
+            let mutating = clear || value.is_some();
+            let room = if mutating {
+                fs::create_dir_all(&args.data_dir)?;
+                Room { room: value }.normalized()?
+            } else {
+                Room::load(&args.data_dir)?
+            };
+            if mutating {
+                room.save(&args.data_dir)?;
+            }
+            println!("{}", room.room.unwrap_or_default());
+            return Ok(());
         }
-        println!("{}", room.room.unwrap_or_default());
-        return Ok(());
+        Some(RuntimeCommand::Telemetry { choice }) => {
+            run_telemetry_command(&args, &choice).await?;
+            return Ok(());
+        }
+        None => {}
     }
     // One fixed lock is shared by YAM-installed and manually copied Luna
     // binaries, regardless of their executable paths.
@@ -6479,6 +6715,8 @@ pub async fn run_with_station(station: Option<StationSpec>) -> Result<()> {
     tracing::info!(model=%device.model,features=?device.features,"detected device");
     let app = App {
         root: args.data_dir.clone(),
+        started: Instant::now(),
+        diagnostics: counters.clone(),
         settings: Arc::new(Mutex::new(settings)),
         device: Arc::new(Mutex::new(device)),
         led,
@@ -6508,6 +6746,7 @@ pub async fn run_with_station(station: Option<StationSpec>) -> Result<()> {
         updater_device.model,
         updater_device.architecture,
     );
+    start_telemetry(app.clone());
     let services = {
         let device = app.device.lock().await.clone();
         app.plugins
@@ -6650,6 +6889,7 @@ pub async fn run_with_station(station: Option<StationSpec>) -> Result<()> {
             .route("/api/runtime/:id/clock", post(runtime_clock))
             .route("/api/runtime/:id/clock/off", post(runtime_clock_off))
             .route("/api/settings", get(get_settings).put(put_settings))
+            .route("/api/telemetry", get(get_telemetry).put(put_telemetry))
             .route("/api/device", get(get_device).put(put_device))
             .route("/api/room", get(get_room).put(put_room))
             .route("/api/sensors", get(get_sensors))

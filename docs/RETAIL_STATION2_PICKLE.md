@@ -1,28 +1,79 @@
-# Station 2 and Mini 3 Pro on retail .50
+# Station 2 и Mini 3 Pro на розничной прошивке .50
 
-Tested on AArch64 retail firmware 0.369.1.50 (2026-10-21 builds), without flashing or rebooting. Use the dedicated `luna-yandexstation_2` and `luna-pickle` executables. Mini 3 Pro is **pickle**, not bergamot or cucumber; its canonical plugin model is `yandexmini_3_pro`.
+> Проверено на AArch64 с прошивкой `0.369.1.50` (сборки от 21 октября 2026)
+> без перепрошивки и перезагрузки. Нужны отдельные бинари
+> `luna-yandexstation_2` и `luna-pickle`.
 
-| Function | Station 2 | Mini 3 Pro |
-|---|---|---|
-| Ring | fb0, 89x1, 32-bit BGRX | 16 RGB sysfs LEDs |
-| Logo | none | 6 RGB sysfs LEDs |
-| Clock | none | 36 sysfs segments |
-| Buttons | midi_touch: 114/115/582; gpio-keys:113 | aw933xx:114/115/582; mute:113 |
-| Shared microphone capture | yio_audio, four raw channels | yio_audio, three raw channels |
-| Playback PCM | dmix_spk_plug | speakers |
+Mini 3 Pro — это **pickle**, а не bergamot и не cucumber. Каноническая модель
+для плагинов — `yandexmini_3_pro`.
 
-The PCM default belongs to the station launcher and can be overridden with `LUNA_AUDIO_PCM`. Playback validates WAV input, waits for aplay completion and reports nonzero exit status; a bounded deadline terminates only its own child. Other profiles retain their existing playback route. No additional audio daemon or exclusive microphone capture is installed.
+| Функция | Station 2 | Mini 3 Pro |
+| :-- | :-- | :-- |
+| Кольцо | `fb0`, 89×1, 32-бит BGRX | 16 RGB-светодиодов через sysfs |
+| Логотип | нет | 6 RGB-светодиодов через sysfs |
+| Часы | нет | 36 сегментов через sysfs |
+| Кнопки | `midi_touch`: 114/115/582; `gpio-keys`: 113 | `aw933xx`: 114/115/582; mute: 113 |
+| Захват микрофона | `yio_audio`, четыре сырых канала | `yio_audio`, три сырых канала |
+| PCM воспроизведения | `dmix_spk_plug` | `speakers` |
 
-The microphone parser accepts both legacy direct IOAudioChannelsData and modern payload/type envelopes, with their different RAW enum values. Only raw microphone channels are captured; speaker and VQE streams are excluded. Requests use the shared yio_audio service, not an exclusive ALSA microphone device.
+## Звук
 
-Pickle LED zones snapshot selected triggers and brightness, and restore them on release only while still owned. Clock release similarly preserves a newer writer. Station 2 keeps cooperative framebuffer ownership and encodes 32-bit pixels as BGRX; existing 24-bit behavior is retained.
+PCM по умолчанию задаёт launcher станции; переопределяется переменной
+`LUNA_AUDIO_PCM`. Воспроизведение проверяет WAV, ждёт завершения `aplay` и
+сообщает ненулевой код возврата; по дедлайну завершается только собственный
+дочерний процесс. Остальные профили сохраняют прежний маршрут. Дополнительный
+аудиодемон не ставится, эксклюзивный захват микрофона не открывается.
 
-## Read-only firmware and coexistence
+Парсер микрофона принимает и старый формат с прямыми `IOAudioChannelsData`, и
+современные конверты payload/type с другими значениями RAW. Захватываются
+только сырые каналы микрофона: динамик и VQE-потоки исключены. Запрос идёт в
+общий сервис `yio_audio`, а не в эксклюзивное устройство ALSA.
 
-Legacy YAM can already occupy port 8099. The installers now default to loopback port 8100 and allow an explicit listen override. For retail squashfs use `install.sh --no-boot-hook --listen 127.0.0.1:8100` or PowerShell `-NoBootHook -Listen 127.0.0.1:8100`. This explicit mode does not remount root or write /etc/init.d. Select the correct station asset and provide persistent startup through your existing /data owner bootstrap if desired. NoBootHook does not promise restart after reboot.
+## Владение индикацией
 
-The profile is source support until a release includes its asset. Existing YAM postinstall boot hooks still require writable init paths; they are not a supported retail-squashfs persistence path. Generic launcher dispatch and OTA behavior are outside this change.
+Зоны LED у Pickle снимают снимок выбранных триггеров и яркости и возвращают его
+при освобождении, только пока зона всё ещё принадлежит Luna. Освобождение часов
+так же сохраняет более нового писателя. Station 2 работает с framebuffer по
+кооперативной схеме и кодирует 32-битные пиксели как BGRX; поведение 24-битных
+профилей не изменилось.
 
-## Validation
+## Прошивка только для чтения
 
-Workspace tests (serial), installer detection and mocked read-only installation; static musl builds for both profiles. On-device LED channel/framebuffer readback, trigger restoration, clock release, evdev volume-up events and shared microphone PCM were checked. Playback through both documented PCMs was heard by the owner. Sensor, Bluetooth, voice recognition and reboot persistence have not been qualified by this matrix. HTTP success alone is not evidence of audible playback.
+Старый YAM уже может занимать порт 8099, поэтому установщики по умолчанию
+слушают loopback `8100` и разрешают явный адрес:
+
+```sh
+install.sh --no-boot-hook --listen 127.0.0.1:8100
+```
+
+```powershell
+.\install.ps1 -NoBootHook -Listen 127.0.0.1:8100
+```
+
+Этот режим не перемонтирует корень и не пишет в `/etc/init.d`. Выберите
+правильный ассет станции, а постоянный запуск обеспечьте своим bootstrap в
+`/data`, если он нужен: `--no-boot-hook` не обещает подъём после перезагрузки.
+
+Профиль считается поддержанным в исходниках, пока его ассет не попал в релиз.
+Boot hook из postinstall YAM по-прежнему требует записываемых путей init и не
+является поддерживаемым способом выжить на squashfs. Общая диспетчеризация
+launcher и OTA в это изменение не входят.
+
+## Проверка
+
+- Тесты workspace (последовательно), определение платформы установщиком,
+  мок-установка на прошивку только для чтения.
+- Статические musl-сборки обоих профилей.
+- На устройстве: чтение каналов LED и framebuffer, восстановление триггеров,
+  освобождение часов, события громкости через evdev, общий PCM микрофона.
+- Воспроизведение через оба описанных PCM владелец слышал лично.
+
+Не проверялись и не подтверждаются: датчики, Bluetooth, распознавание речи и
+сохранность после перезагрузки. Успешный HTTP-ответ сам по себе не доказывает
+слышимый звук.
+
+## См. также
+
+- [GETTING_STARTED.md](GETTING_STARTED.md) — установка и первый пакет.
+- [API.md](API.md) — громкость, LED, часы и микрофон.
+- [DEVICE_GUIDE.md](DEVICE_GUIDE.md) — как устроен station crate.

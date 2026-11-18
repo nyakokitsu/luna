@@ -8,6 +8,7 @@ mod owner;
 mod process;
 mod quasar_microphone;
 pub(crate) mod rooms;
+mod telemetry;
 mod updater;
 
 pub use gateway::{

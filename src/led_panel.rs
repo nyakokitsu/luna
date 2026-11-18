@@ -413,6 +413,8 @@ mod tests {
         settings.count = 3;
         App {
             root,
+            started: Instant::now(),
+            diagnostics: crate::telemetry::Counters::default(),
             settings: Arc::new(Mutex::new(Settings::default())),
             device: Arc::new(Mutex::new(DeviceProfile {
                 model: "test".into(),

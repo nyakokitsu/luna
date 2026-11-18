@@ -1,6 +1,6 @@
 # Luna
 
-**Runtime и единый API для модов на станциях Яндекса.** Один пакет работает на Mini, Mini 2, Mini 3, Midi, Micro, Плюме и других станциях — без отдельной сборки под каждую модель.
+**Runtime и единый API для модов на станциях Яндекса.** Один пакет работает на Mini, Mini 2, Mini 3, Midi, Micro, Плюм и других станциях — без отдельной сборки под каждую модель.
 
 [![CI](https://github.com/nyakokitsu/luna/actions/workflows/ci.yml/badge.svg)](https://github.com/nyakokitsu/luna/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/nyakokitsu/luna?label=release)](https://github.com/nyakokitsu/luna/releases) [![Devices](https://img.shields.io/badge/devices-10-c4623f)](luna-manifest.json) [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE) [![Rust](https://img.shields.io/badge/rust-2021-dea584?logo=rust&logoColor=white)](Cargo.toml)
 
@@ -28,14 +28,14 @@ end
 
 | Возможность | Что даёт |
 | :-- | :-- |
-| ![](assets/icons/lua-api.svg) **Единый Lua API** | LED, часы, громкость, input, датчики, аудио, микрофон, Bluetooth, речь и команды Алисы |
-| ![](assets/icons/capability.svg) **Проверка capability** | `device.has_*`, topology и `is_available()` — один код на все модели |
-| ![](assets/icons/permissions.svg) **Разрешения** | мод получает только то, что запросил в manifest |
-| ![](assets/icons/http-api.svg) **HTTP API** | управление станцией, диагностика и внешние HTTP(S)-запросы |
-| ![](assets/icons/web-panel.svg) **Веб-панель** | тесты, настройки и LED-визуализатор прямо на станции |
-| ![](assets/icons/panel-style.svg) **Общий стиль** | сторонние панели подключают `/luna-panel.css` и выглядят как часть Luna |
-| ![](assets/icons/yam-packages.svg) **YAM** | установка, обновление и удаление пакетов |
-| ![](assets/icons/station.svg) **Отдельные станции** | поддержка железа живёт в своём crate, а не в общем gateway |
+| ![Единый Lua API](assets/icons/lua-api.svg) **Единый Lua API** | LED, часы, громкость, input, датчики, аудио, микрофон, Bluetooth, речь и команды Алисы |
+| ![Проверка capability](assets/icons/capability.svg) **Проверка capability** | `device.has_*`, topology и `is_available()` — один код на все модели |
+| ![Разрешения](assets/icons/permissions.svg) **Разрешения** | мод получает только то, что запросил в manifest |
+| ![HTTP API](assets/icons/http-api.svg) **HTTP API** | управление станцией, диагностика и внешние HTTP(S)-запросы |
+| ![Веб-панель](assets/icons/web-panel.svg) **Веб-панель** | тесты, настройки и LED-визуализатор прямо на станции |
+| ![Общий стиль](assets/icons/panel-style.svg) **Общий стиль** | сторонние панели подключают `/luna-panel.css` и выглядят как часть Luna |
+| ![YAM](assets/icons/yam-packages.svg) **YAM** | установка, обновление и удаление пакетов |
+| ![Отдельные станции](assets/icons/station.svg) **Отдельные станции** | поддержка железа живёт в своём crate, а не в общем gateway |
 
 ## Архитектура
 
@@ -86,11 +86,14 @@ YAM_PLATFORM=yandexmini /data/yam/bin/yam-run install yam/luna
 curl -fsSL https://raw.githubusercontent.com/nyakokitsu/luna/main/install.sh | sh
 ```
 
-Если станций несколько:
+Если станций несколько, серийный номер передаётся переменной:
 
 ```sh
-ADB_SERIAL=<serial> sh install.sh
+curl -fsSL https://raw.githubusercontent.com/nyakokitsu/luna/main/install.sh | ADB_SERIAL=<serial> sh
 ```
+
+Флаги установщика: `--platform`, `--listen`, `--no-boot-hook`, `--uninstall`,
+`--telemetry`, `--no-telemetry`, `--quiet`. Полный список — `sh install.sh --help`.
 
 Windows:
 
@@ -176,15 +179,19 @@ http://192.168.1.50:8099/
 
 Сторонние панели не рисуют свой дизайн: Luna отдаёт общий стиль `GET /luna-panel.css`. Требования и пример страницы — в [WEB_PANELS.md](docs/WEB_PANELS.md).
 
+Анонимная статистика выключена по умолчанию: панель спрашивает согласие при первом открытии, состав отчёта — в [TELEMETRY.md](docs/TELEMETRY.md).
+
 ## Документация
 
 | Документ | О чём |
 | :-- | :-- |
+| [docs/README.md](docs/README.md) | оглавление всей документации по задачам |
 | [GETTING_STARTED.md](docs/GETTING_STARTED.md) | от установки до первого пакета |
 | [PACKAGE_GUIDE.md](docs/PACKAGE_GUIDE.md) | как написать пакет на Luna |
 | [PLUGINS.md](docs/PLUGINS.md) | Lua-плагины и бандлы через YAM |
 | [API.md](docs/API.md) | HTTP API, разрешения, внешние запросы |
 | [WEB_PANELS.md](docs/WEB_PANELS.md) | требования к сторонним веб-панелям |
+| [TELEMETRY.md](docs/TELEMETRY.md) | анонимная статистика: согласие и состав отчёта |
 | [DEVICE_GUIDE.md](docs/DEVICE_GUIDE.md) | как добавить новую станцию |
 | [EXTENDING_STATION.md](docs/EXTENDING_STATION.md) | как доработать поддержанную станцию |
 | [MEDIA_PROVIDERS.md](docs/MEDIA_PROVIDERS.md) | медиапровайдеры и адаптеры плееров |

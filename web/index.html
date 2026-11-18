@@ -122,6 +122,13 @@ pre.ok{color:var(--ok)}pre.bad{color:var(--bad)}
 .toast{padding:9px 16px;border-radius:11px;background:var(--text);color:var(--bg);font-size:14px;box-shadow:0 8px 24px rgba(0,0,0,.22);animation:tin .3s var(--ease)}
 .toast.bad{background:var(--bad);color:#fff}.toast.out{opacity:0;transform:translateY(6px);transition:.25s}
 @keyframes tin{from{opacity:0;transform:translateY(10px)}}
+.dlg{position:fixed;inset:0;z-index:60;display:grid;place-items:center;padding:20px;background:rgba(0,0,0,.45);backdrop-filter:blur(3px)}
+.dlg[hidden]{display:none}
+.dlg-box{width:min(540px,100%);max-height:calc(100vh - 40px);overflow:auto;background:var(--surf);border:1px solid var(--line);border-radius:18px;padding:26px;box-shadow:0 24px 60px rgba(0,0,0,.3);animation:vin .28s var(--ease)}
+.dlg-box h2{margin:0 0 8px;font:500 21px var(--serif)}
+.dlg-box ul{margin:14px 0 0;padding-left:18px;color:var(--mut);font-size:14px}
+.dlg-box li{margin:5px 0}
+.dlg-actions{display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap;margin-top:22px}
 #scrim{display:none}
 @media(max-width:900px){
 .app{grid-template-columns:1fr}
@@ -226,6 +233,10 @@ aside{position:fixed;z-index:30;left:0;top:0;width:272px;transform:translateX(-1
       <label class="sw"><span>Разрешить HTTP-запросы из API</span><input id="setting-web-net" type="checkbox"></label>
       <label class="sw"><span>Разрешить незащищённый http://</span><input id="setting-web-net-http" type="checkbox"></label>
       <div class="g2"><label class="fld">Разрешённые хосты<input class="in" id="setting-web-net-allow" placeholder="api.example.org, *.example.org"></label></div></div>
+    <div class="card"><h3>Анонимная статистика</h3>
+      <p class="mut">Необязательный отчёт о станции и Luna: модель, возможности, установленные модули, настройки, ошибки и нагрузка. Без имени сети, серийного номера, IP и текста комнаты.</p>
+      <label class="sw"><span>Отправлять анонимную статистику</span><input id="setting-telemetry" type="checkbox"></label>
+      <p class="mut" id="telemetry-note" style="margin-top:10px">Проверяю состояние…</p></div>
     <div id="sv"><span>Есть несохранённые изменения</span><span class="row" style="gap:8px"><button class="btn" id="s-reset">Отменить</button><button class="btn pri" id="s-save">Сохранить</button></span></div>
   </div>
 
@@ -241,6 +252,20 @@ aside{position:fixed;z-index:30;left:0;top:0;width:272px;transform:translateX(-1
 
   <div class="wrap view" id="v-plugin"><iframe id="frame" title="Веб-интерфейс плагина"></iframe></div>
 </main>
+</div>
+<div class="dlg" id="tstats" hidden role="dialog" aria-modal="true" aria-labelledby="tstats-title">
+  <div class="dlg-box">
+    <h2 id="tstats-title">Помочь развитию Luna?</h2>
+    <p class="mut">Станция может раз в час отправлять анонимный отчёт на stats.x-servers.ru. Это необязательно и ничего не ограничивает: без согласия не уходит ни один байт.</p>
+    <ul>
+      <li>версия Luna, модель и архитектура станции, список возможностей;</li>
+      <li>идентификаторы и версии установленных модулей, счётчики запусков;</li>
+      <li>включённые настройки и разрешения Lua, число предупреждений и ошибок;</li>
+      <li>память, load average, температура CPU и время работы.</li>
+    </ul>
+    <p class="mut" style="margin-top:14px">Не отправляются: IP и имя сети, серийный номер, имя хоста, текст метки комнаты, содержимое модулей, файлы и список приватных хостов. Решение можно изменить в настройках.</p>
+    <div class="dlg-actions"><button class="btn" id="tstats-no">Не отправлять</button><button class="btn pri" id="tstats-yes">Отправлять</button></div>
+  </div>
 </div>
 <div id="toasts" aria-live="polite"></div>
 
@@ -543,6 +568,42 @@ async function saveSettings(){
   }catch(e){toast(e.message,'bad')}finally{b.disabled=false}
 }
 $('#s-save').onclick=saveSettings;$('#s-reset').onclick=()=>fillSettings(settingsState);
+
+/* ---------- анонимная статистика ---------- */
+let telemetryState={enabled:false,consent:'unset'};
+function telemetryNote(){
+  const el=$('#telemetry-note');if(!el)return;
+  if(telemetryState.consent==='unset')el.textContent='Вопрос ещё не задан: станция ничего не отправляет.';
+  else if(telemetryState.enabled)el.textContent='Включена: один анонимный отчёт в час на stats.x-servers.ru.';
+  else el.textContent='Выключена: станция ничего не отправляет.';
+}
+function applyTelemetry(state){
+  telemetryState=Object.assign(telemetryState,state||{});
+  $('#setting-telemetry').checked=telemetryState.enabled===true;
+  telemetryNote();
+}
+function showTelemetryDialog(){$('#tstats').hidden=false;$('#tstats-yes').focus()}
+function hideTelemetryDialog(){$('#tstats').hidden=true}
+async function loadTelemetry(){
+  try{
+    const r=await fetchApi('/telemetry');if(!r.response.ok)return;
+    const s=testJson(r.text)||{};
+    applyTelemetry(s);
+    if(s.consent==='unset')showTelemetryDialog();
+  }catch(_){}
+}
+async function saveTelemetry(enabled){
+  try{
+    const r=await fetchApi('/telemetry',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({enabled:enabled})});
+    if(!r.response.ok){toast('Статистика: ошибка '+r.response.status+' '+pretty(r.text).slice(0,120),'bad');$('#setting-telemetry').checked=telemetryState.enabled===true;return}
+    applyTelemetry(testJson(r.text)||{});
+    hideTelemetryDialog();
+    toast(enabled?'Анонимная статистика включена':'Анонимная статистика выключена');
+  }catch(e){toast('Нет связи: '+e.message,'bad');$('#setting-telemetry').checked=telemetryState.enabled===true}
+}
+$('#setting-telemetry').addEventListener('change',e=>saveTelemetry(e.target.checked));
+$('#tstats-yes').onclick=()=>saveTelemetry(true);
+$('#tstats-no').onclick=()=>saveTelemetry(false);
 
 /* ---------- endpoints ---------- */
 const EP=`# Device и sensors
@@ -855,7 +916,7 @@ $('#refresh').onclick=refreshPageData;
 $('#theme').onclick=()=>applyTheme(document.documentElement.dataset.theme==='dark'?'light':'dark');
 applyTheme(document.documentElement.dataset.theme);
 buildLedCanvas({ring_count:6,has_logo:true,logo_count:1});drawSwatches();buildEndpoints();route();
-sendDevice();loadRoom();loadSettings();refreshCustomWebTabs();refreshPluginIds();
+sendDevice();loadRoom();loadSettings();loadTelemetry();refreshCustomWebTabs();refreshPluginIds();
 setInterval(()=>{refreshCustomWebTabs();refreshPluginIds()},5000);
 </script>
 </body>

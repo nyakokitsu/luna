@@ -8,6 +8,8 @@ param(
     [string]$Listen = $(if ($env:LUNA_LISTEN) { $env:LUNA_LISTEN } else { "127.0.0.1:8100" }),
     [switch]$NoBootHook,
     [switch]$Uninstall,
+    [switch]$Telemetry,
+    [switch]$NoTelemetry,
     [switch]$Quiet
 )
 $ErrorActionPreference = "Stop"
@@ -323,6 +325,29 @@ echo "Luna installed"
     if ($LASTEXITCODE -ne 0) { Fail "Remote installation failed" }
     Write-StageDone
 
+    # Анонимная статистика: только явное согласие. Решение записывает сама
+    # Luna (`telemetry on|off`), чтобы веб-панель не спрашивала второй раз;
+    # без ответа файл не создаётся и панель спросит при первом открытии.
+    $stats = ""
+    if ($Telemetry) { $stats = "on" }
+    elseif ($NoTelemetry) { $stats = "off" }
+    elseif (-not $Quiet) {
+        try {
+            $answer = Read-Host "   Отправлять анонимную статистику Luna? [y/N]"
+            if ($answer -match '^(y|yes|д|да)$') { $stats = "on" } else { $stats = "off" }
+        } catch { $stats = "" }
+    }
+    if ($stats) {
+        try {
+            if ($stats -eq "on") {
+                Invoke-AdbShell "$RemoteRoot/bin/luna --data-dir '$RemoteRoot/data' --model '$($entry.device)' telemetry on" | Out-Null
+            } else {
+                Invoke-AdbShell "$RemoteRoot/bin/luna --data-dir '$RemoteRoot/data' telemetry off" | Out-Null
+            }
+            Write-Detail ("statistics: {0}" -f $stats)
+        } catch { Write-Warn "Station did not confirm the statistics choice." }
+    }
+
     Write-Progress -Id 1 -Activity "Luna installer" -Completed
     $total = (Get-Date) - $script:InstallStarted
     Write-Host ""
@@ -333,6 +358,9 @@ echo "Luna installed"
     Write-Host ("   API:     http://{0}/api" -f $Listen)
     Write-Host ("   data:    {0}/data" -f $RemoteRoot)
     Write-Host ("   log:     {0}/luna.log" -f $RemoteRoot)
+    if ($stats -eq "on") { Write-Host "   stats:   on" }
+    elseif ($stats -eq "off") { Write-Host "   stats:   off" }
+    else { Write-Host "   stats:   ask in the web panel" }
     Write-Host ""
 } catch {
     Write-Progress -Id 1 -Activity "Luna installer" -Completed

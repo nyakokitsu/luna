@@ -1,78 +1,87 @@
-# Mini 3 native volume qualification
+# Mini 3: нативная громкость
 
-## Problem and change
+> Backend выбирается по точной записи device tree `yandex,bergamot`, а не по
+> строке прошивки. Протокол Quasar остался прежним.
 
-On the tested Mini 3, Luna fell back to ALSA because its firmware was absent
-from the native-volume allowlist. ALSA writes changed playback loudness without
-updating Quasar's logical volume, so the first hardware volume-button press
-could jump to Quasar's retained level.
+## Проблема
 
-Select the backend by the exact NUL-separated device-tree entry
-`yandex,bergamot`, not by the firmware build string. Any non-empty
-`version_full` on that board may try the existing native protocol. Similar
-board names remain rejected. The protocol is unchanged: read logical state
-from `stereo_pair`, send VolumeSet through `iohub_clients`, and wait for the
-logical-state acknowledgement. A build that does not implement the protocol
-fails the acknowledgement and falls back to `maind`/ALSA, exactly as before.
+На проверенной Mini 3 прошивки не было в списке допуска нативной громкости,
+поэтому Luna работала через ALSA. Запись в ALSA меняла громкость звука, но не
+обновляла логическую громкость Quasar: первое нажатие аппаратной кнопки могло
+перескочить на сохранённый уровень Quasar.
 
-The 7 November validation below still covers only
-`0.369.1.50.4794652521.20261021.117`; other builds are not individually
-tested. The change removes the build-string gate, not the requirement to
-verify the write acknowledgement.
+## Что изменено
 
-## Validation on 7 November 2026
+Backend выбирается по точному NUL-разделённому элементу device tree
+`yandex,bergamot`, а не по строке сборки. Любой непустой `version_full` на этой
+плате может попробовать существующий нативный протокол; похожие имена плат
+по-прежнему отклоняются.
 
-Device: Mini 3, model `yandexmini3`, DT entries
-`yandex,bergamot-evt1`, `yandex,bergamot`, and `amlogic, axg`.
-Configured IPC ports were 9921 for state and 9910 for control.
-The older `volume_manager` port 9922 had no listener.
+Сам протокол не менялся: чтение логического состояния из `stereo_pair`,
+`VolumeSet` через `iohub_clients` и ожидание подтверждения логического
+состояния. Сборка, где протокола нет, не получает подтверждение и откатывается
+на `maind`/ALSA, как раньше.
 
-Before the change, Luna reported ALSA's 13% while the independent Quasar
-state stream reported 5%. The existing native protocol successfully
-acknowledged a direct 5 → 0 → 5% round trip.
+Проверка от 7 ноября покрывает только
+`0.369.1.50.4794652521.20261021.117`; другие сборки по отдельности не
+тестировались. Изменение снимает проверку строки сборки, но не требование
+подтверждать запись.
 
-The regression test was observed failing without the qualification and passing
-with it. `cargo test --workspace --locked` passed 136 tests with one existing
-ignored performance audit, `packaged_manifest_read_cost`.
+## Проверка 7 ноября 2026
 
-Built `cargo build --release --locked -p luna-yandexmini3` with Rust 1.99.1
-in an AArch64 Alpine Podman container. Use the station-specific binary:
-the generic executable does not identify this board automatically.
+| Параметр | Значение |
+| :-- | :-- |
+| Устройство | Mini 3, модель `yandexmini3` |
+| Device tree | `yandex,bergamot-evt1`, `yandex,bergamot`, `amlogic, axg` |
+| IPC-порты | 9921 — состояние, 9910 — управление |
+| Порт 9922 (`volume_manager`) | слушателя нет |
 
-After installation, independent state-stream reads matched both API responses
-and subsequent API GETs:
+До изменения Luna показывала 13% из ALSA, а независимый поток состояния Quasar
+— 5%. Существующий нативный протокол успешно подтвердил прямой цикл
+5 → 0 → 5%.
 
-| Requested | API set | API GET | Quasar logical |
-|---|---|---|---|
-| 5% | 5% | 5% | 5% |
-| 0% | 0% | 0% | 0% |
-| 5% | 5% | 5% | 5% |
+Регрессионный тест падал без квалификации и проходил с ней.
+`cargo test --workspace --locked` — 136 тестов, один существующий пропущенный
+аудит производительности `packaged_manifest_read_cost`.
 
-AirPlay restarted with native controls enabled. Final level was 5%.
-After installation the owner reported that everything appeared to work
-normally. This overall acceptance does not establish a separately recorded
-first-button sequence or a cold-boot test.
-Other firmware builds and sustained or high-volume operation were not tested.
+Сборка: `cargo build --release --locked -p luna-yandexmini3`, Rust 1.99.1,
+контейнер AArch64 Alpine (Podman). Нужен бинарь конкретной станции: общий
+исполняемый файл эту плату сам не определяет.
 
-The local binary was installed with a backup. Release auto-update was disabled
-through `[updates] enabled = false` because it replaced the custom build;
-this is a local validation prerequisite, not a change to update defaults.
-The existing service initialization was preserved.
+После установки независимое чтение потока состояния совпало и с ответами API, и
+с последующими `GET`:
 
-## Architecture and contribution scope
+| Запрошено | `POST` | `GET` | Логическое состояние Quasar |
+| :-- | :-- | :-- | :-- |
+| 5 % | 5 % | 5 % | 5 % |
+| 0 % | 0 % | 0 % | 0 % |
+| 5 % | 5 % | 5 % | 5 % |
 
-This qualifies an existing shared Quasar volume backend, rather than adding
-an endpoint, capability, or station-specific hardware implementation.
-The existing stations/yandexmini3 crate still provides model, LED, clock,
-and input metadata. No model switch is added to src/gateway.rs.
+AirPlay перезапущен с включённым нативным управлением, итоговый уровень 5%.
+После установки владелец сообщил, что всё работает как обычно. Отдельно
+зафиксированной последовательности «первое нажатие кнопки» и проверки холодной
+загрузки в этой приёмке нет. Другие сборки прошивки, длительная работа и
+высокая громкость не проверялись.
 
-EXTENDING_STATION.md requires using existing Quasar IPC for sound, and
-DEVICE_GUIDE.md §9 explicitly says not to duplicate volume API or Quasar IPC
-in station crates. Keeping firmware qualification beside the existing common
-protocol follows that boundary; no new trait or copied station backend is
-needed for this correction.
+Локальный бинарь ставился с резервной копией. Автообновление отключено через
+`[updates] enabled = false`, потому что оно заменяло кастомную сборку: это
+условие локальной проверки, а не изменение значений по умолчанию. Штатная
+инициализация сервиса сохранена.
 
-Discovery commands used on the station over SSH:
+## Границы изменения
+
+Квалифицируется существующий общий backend громкости Quasar, а не новый
+эндпоинт, capability или станционная реализация железа. Crate
+`stations/yandexmini3` по-прежнему даёт модель, LED, часы и input; переключателя
+моделей в `src/gateway.rs` не появляется.
+
+[EXTENDING_STATION.md](EXTENDING_STATION.md) требует использовать существующий
+IPC Quasar для звука, а [DEVICE_GUIDE.md](DEVICE_GUIDE.md) §9 прямо запрещает
+дублировать API громкости и IPC Quasar в station crate. Квалификация прошивки
+рядом с общим протоколом эту границу соблюдает: новый trait и копия backend не
+нужны.
+
+## Диагностика на станции
 
 ```sh
 cat /system/vendor/quasar/version_full
@@ -82,12 +91,17 @@ wget -qO- http://127.0.0.1:8099/api/volume
 netstat -lnt
 ```
 
-Observed firmware and DT entries are recorded above. Before and after the
-change, /api/device reported model yandexmini3, architecture aarch64,
-led.ring.rgb, led.ring.6, led.pattern.v1, display.clock.segment.v1 and ring
-count 6. StationSpec features, HTTP volume paths and response shapes did
-not change.
+До и после изменения `/api/device` показывал модель `yandexmini3`, архитектуру
+`aarch64`, возможности `led.ring.rgb`, `led.ring.6`, `led.pattern.v1`,
+`display.clock.segment.v1` и 6 LED в кольце. Возможности `StationSpec`, пути и
+форматы ответов HTTP-громкости не менялись.
 
-Local rollback: stop Luna, restore the saved original station binary and
-settings, then start through the original service with its YAM arguments.
-No service initialization or update-default change is part of this patch.
+Откат: остановить Luna, вернуть сохранённый исходный бинарь и настройки,
+запустить штатным сервисом с его аргументами YAM. Инициализация сервиса и
+значения обновлений в патч не входят.
+
+## См. также
+
+- [MINI2_VOLUME_046.md](MINI2_VOLUME_046.md) — та же задача для Mini 2.
+- [LITE_VOLUME_297.md](LITE_VOLUME_297.md) — Станция Лайт 2.
+- [API.md](API.md) — раздел `Громкость`.

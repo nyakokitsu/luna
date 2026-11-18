@@ -5,4 +5,7 @@
 /tools/release.sh
 /.luna-last-release
 
+# Local statistics collector for stats.x-servers.ru; never published.
+/stats-server/
+
 .DS_Store

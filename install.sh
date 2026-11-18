@@ -7,6 +7,11 @@ BOOT_HOOK=1
 LISTEN=${LUNA_LISTEN:-127.0.0.1:8100}
 UNINSTALL=0
 QUIET=0
+case "${LUNA_TELEMETRY:-ask}" in
+  on|yes|1|true) TELEMETRY=on ;;
+  off|no|0|false) TELEMETRY=off ;;
+  *) TELEMETRY=ask ;;
+esac
 
 usage() {
   cat <<'USAGE'
@@ -23,6 +28,8 @@ Luna installer — runtime для станций Яндекса.
       --listen ADDR      адрес API (по умолчанию 127.0.0.1:8100)
       --no-boot-hook     ставить только в /data, без /etc/init.d
       --uninstall        удалить Luna со станции
+      --telemetry        включить анонимную статистику без вопроса
+      --no-telemetry     не отправлять анонимную статистику
   -q, --quiet            показывать только предупреждения и ошибки
   -h, --help             эта справка
 
@@ -31,6 +38,7 @@ Luna installer — runtime для станций Яндекса.
   LUNA_VERSION           тег релиза
   LUNA_PLATFORM          платформа станции
   LUNA_LISTEN            адрес API
+  LUNA_TELEMETRY         on, off или ask (по умолчанию ask)
   LUNA_REMOTE_ROOT       каталог установки (по умолчанию /data/quazar/luna)
   LUNA_REPOSITORY        репозиторий релизов
   NO_COLOR               отключить цвета
@@ -56,6 +64,8 @@ while [ "$#" -gt 0 ]; do
       [ "$#" -ge 2 ] || { echo "option $1 requires a value" >&2; exit 2; }
       VERSION=$2; shift 2 ;;
     --uninstall) UNINSTALL=1; shift ;;
+    --telemetry) TELEMETRY=on; shift ;;
+    --no-telemetry) TELEMETRY=off; shift ;;
     --quiet|-q) QUIET=1; shift ;;
     --help|-h) usage; exit 0 ;;
     -*)
@@ -428,6 +438,42 @@ adb -s "$SERIAL" shell "LUNA_ROOT='$ROOT' LUNA_LISTEN='$LISTEN' LUNA_BOOT_HOOK='
   die "удалённая установка завершилась ошибкой" 9
 stage_done
 
+# Анонимная статистика: только явное согласие. Решение записывает сама Luna
+# (`telemetry on|off`), чтобы веб-панель не спрашивала второй раз. Без ответа
+# файл не создаётся и панель спросит при первом открытии.
+telemetry_decide() {
+  case "$TELEMETRY" in
+    on) return 0 ;;
+    off) return 1 ;;
+  esac
+  TELEMETRY=''
+  [ "$QUIET" -eq 0 ] || return 1
+  [ -r /dev/tty ] || return 1
+  printf '\n   Отправлять анонимную статистику Luna?\n' >&2
+  printf '   %sмодель, версия, модули, настройки, ошибки и нагрузка станции;%s\n' "$DIM" "$NC" >&2
+  printf '   %sбез IP, серийного номера, имени хоста и текста комнаты.%s\n' "$DIM" "$NC" >&2
+  printf '   Отправлять на stats.x-servers.ru? [y/N]: ' >&2
+  answer=''
+  read -r answer </dev/tty || return 1
+  case "$answer" in
+    y|Y|yes|YES|Yes|д|Д|да|ДА|Да) TELEMETRY=on; return 0 ;;
+    *) TELEMETRY=off; return 1 ;;
+  esac
+}
+
+if telemetry_decide; then
+  info "включаю анонимную статистику"
+  if telemetry_out=$(adb -s "$SERIAL" shell "$ROOT/bin/luna --data-dir '$ROOT/data' --model '$DEVICE' telemetry on" </dev/null 2>&1); then
+    [ "$QUIET" -eq 1 ] || printf '   %s\n' "$telemetry_out" | sed "s/^/   $DIM/" >&2
+  else
+    warn "станция не подтвердила включение статистики"
+  fi
+elif [ "$TELEMETRY" = off ]; then
+  adb -s "$SERIAL" shell "$ROOT/bin/luna --data-dir '$ROOT/data' telemetry off" </dev/null >/dev/null 2>&1 ||
+    warn "не удалось записать отказ от статистики"
+  [ "$QUIET" -eq 1 ] || info "анонимная статистика выключена"
+fi
+
 total=$(( $(date +%s) - TOTAL_START ))
 if [ "$QUIET" -eq 0 ]; then
   printf '\n%sLuna установлена%s %s(%ss)%s\n' "$BOLD" "$NC" "$DIM" "$total" "$NC" >&2
@@ -435,5 +481,10 @@ if [ "$QUIET" -eq 0 ]; then
   printf '   версия:  %s\n' "$VERSION" >&2
   printf '   API:     http://%s/api\n' "$LISTEN" >&2
   printf '   данные:  %s/data\n' "$ROOT" >&2
-  printf '   лог:     %s/luna.log\n\n' "$ROOT" >&2
+  printf '   лог:     %s/luna.log\n' "$ROOT" >&2
+  case "$TELEMETRY" in
+    on) printf '   статистика: %sвключена%s\n\n' "$GREEN" "$NC" >&2 ;;
+    off) printf '   статистика: выключена\n\n' >&2 ;;
+    *) printf '   статистика: спрошу в веб-панели\n\n' >&2 ;;
+  esac
 fi

@@ -1,35 +1,46 @@
-# LED colour contract
+# Цвет LED: контракт
 
-Luna accepts logical `#RRGGBB` colours from the runtime API and the Lua
-`alice.led` helpers. A station crate owns the two hardware steps between that
-contract and the LEDs:
+> Плагин отдаёт логический `#RRGGBB`, а порядок каналов и калибровку под
+> конкретную станцию применяет Luna. Дублировать это в моде нельзя.
 
-1. `StationSpec::color_order` (`Rgb` or `Bgr`) packs logical channels in the
-   order the driver expects.
-2. `StationSpec::led_calibration` optionally names a stock profile in
-   `/system/vendor/quasar/ledconfigs/<profile>.json`. Luna applies that 3×3
-   matrix before `color_order` and preserves the source pixel peak so a loud
-   band does not clip into a flat frame.
+Цвета приходят из runtime API и Lua-хелперов `alice.led` в логическом RGB.
+Дальше station crate описывает два шага, которые Luna выполняет на каждом
+кадре — в том числе при воспроизведении, паузе и обычных вызовах `/led`.
 
-Both steps run for every LED frame, including playback, pause and plugin
-`/led` calls. A missing or invalid stock file falls back to a built-in matrix
-for profiles Luna knows; it never silently drops the correction for a model
-that declares one.
+| Шаг | Где задаётся | Что делает |
+| :-- | :-- | :-- |
+| Порядок каналов | `StationSpec::color_order` | `Rgb` или `Bgr` — драйвер получает байты в своём порядке |
+| Калибровка | `StationSpec::led_calibration` | имя профиля в `/system/vendor/quasar/ledconfigs/<profile>.json` |
 
-## Capabilities for plugins
+Калибровка — матрица 3×3 из штатного профиля. Luna применяет её **до**
+перестановки каналов и сохраняет пик исходного пикселя, чтобы громкий участок
+не превращался в ровную заливку.
 
-A station that depends on the new contract advertises:
+Если файл профиля отсутствует или испорчен, Luna берёт встроенную матрицу для
+известных моделей. Исправление не отключается молча: модель, которая его
+объявила, получает калибровку всегда.
 
-- `led.calibration.v1` — Luna applies the stock matrix. A plugin must not
-  apply the same matrix again.
-- `led.color.logical-rgb.v1` — Luna emits logical RGB for this model. A plugin
-  must not pre-swap R/B.
+## Возможности для плагинов
 
-Older Luna builds do not advertise these features. Plugins that support both
-should keep their workaround behind the capability check and use it only when
-the feature is absent.
+Станция, которая работает по этому контракту, объявляет:
 
-Mini 2 (`yandexmini_2`) is the first user of both capabilities: it declares
-the stock `red` profile and `ColorOrder::Rgb`. Before this change the station
-was packed as BGR, which forced plugins to swap R/B and apply the matrix
-themselves.
+| Capability | Что значит | Что нельзя делать плагину |
+| :-- | :-- | :-- |
+| `led.calibration.v1` | матрицу применяет Luna | применять ту же матрицу повторно |
+| `led.color.logical-rgb.v1` | Luna отдаёт логический RGB | заранее менять R и B местами |
+
+Старые сборки Luna этих возможностей не объявляют. Если плагин поддерживает
+и новые, и старые версии, обходной путь должен оставаться внутри проверки
+`device.has_led_calibration` / `device.has_led_color_logical_rgb`.
+
+Первым обе возможности получил Mini 2 (`yandexmini_2`): штатный профиль `red`
+и `ColorOrder::Rgb`. До этого станция упаковывалась как BGR, и плагинам
+приходилось самим менять каналы и применять матрицу.
+
+## См. также
+
+- [GENERIC-LED-CALIBRATION.md](GENERIC-LED-CALIBRATION.md) — HTTP-контракт
+  калибровки и приоритет владения LED.
+- [API.md](API.md) — раздел `LED`.
+- [DEVICE_GUIDE.md](DEVICE_GUIDE.md) — как объявить порядок каналов и профиль
+  в новом station crate.
