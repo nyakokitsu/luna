@@ -127,7 +127,11 @@ curl -X PUT "$BASE/settings" \
       "sysfs_root":"/sys/class/leds",
       "path_template":null
     },
-    "web":{"ui":true,"api":true},
+    "web":{
+      "ui":true,
+      "api":true,
+      "network":{"enabled":false,"allow":[],"allow_insecure_http":false}
+    },
     "allow_plugin_binaries":false,
     "updates":{"enabled":false,"interval_minutes":360},
     "lua": {
@@ -235,6 +239,69 @@ endpoint всё равно остаётся доступной.
 
 Даже при разрешённых бесконечных циклах рекомендуется использовать
 `alice.sleep(...)`, чтобы не загружать CPU станции.
+
+## Внешние HTTP-запросы
+
+Luna может отправлять HTTP/HTTPS-запросы из API во внешнюю сеть. Это нужно
+веб-панелям и скриптам на другой машине: станция часто имеет доступ в интернет,
+а клиентский браузер — нет. Прокси отключён по умолчанию и ограничен списком
+хостов.
+
+Разрешение задаётся в `settings.toml` или через `PUT /api/settings`:
+
+```toml
+[web.network]
+enabled = true
+allow = ["api.example.org", "*.example.org"]
+allow_insecure_http = false
+```
+
+| Поле | Что разрешает |
+|---|---|
+| `enabled` | отправку запросов из API; по умолчанию `false` |
+| `allow` | список хостов; пустой список не разрешает ничего |
+| `allow_insecure_http` | `http://`; без него принимается только `https://` |
+
+`*` разрешает любой хост, `*.example.org` — все поддомены. Локальные адреса
+(`localhost`, `127.0.0.0/8`, частные, link-local и multicast-сети) запрещены
+всегда, как и URL с логином или паролем. Редиректы не выполняются: ответ
+`3xx` возвращается как есть.
+
+### `POST /api/http`
+
+```sh
+curl -X POST "$BASE/http" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "method":"GET",
+    "url":"https://api.example.org/status",
+    "headers":{"Accept":"application/json"}
+  }'
+```
+
+Поля:
+
+- `method` — по умолчанию `GET`; допустимы `GET`, `POST`, `PUT`, `PATCH`,
+  `DELETE`, `HEAD`, `OPTIONS`;
+- `url` — абсолютный `http(s)`-адрес, хост должен быть в `web.network.allow`;
+- `headers` — необязательная карта, до 32 заголовков; нельзя задавать
+  `Host`, `Content-Length`, `Connection`, `Transfer-Encoding`, `Upgrade`,
+  `Keep-Alive`, `TE`, `Trailer` и proxy-заголовки;
+- `body` — необязательное тело, до 1 МиБ.
+
+Ответ:
+
+```json
+{"status":200,"body":"{\"ok\":true}"}
+```
+
+`status` — код ответа внешнего сервера, `body` — его тело как текст (до 1 МиБ).
+Luna отвечает `200`, если запрос выполнен, и `400` с `{"error":"..."}`, если
+запрос отклонён политикой или сетевой операцией. Таймаут запроса — 20 секунд,
+подключения — 10 секунд.
+
+Требования к оформлению сторонних панелей и примеры описаны в
+[WEB_PANELS.md](WEB_PANELS.md).
 
 ## LED
 
@@ -1172,6 +1239,10 @@ local url = register.customweb("web/index.html")
 внутри каталога плагина и не превышать 4 МБ. Luna не выдаёт произвольные файлы
 пакета: наружу публикуется только явно зарегистрированный файл. Регистрация
 удаляется при остановке плагина.
+
+Сторонняя панель не рисует собственный дизайн: она подключает общий стиль
+Luna (`GET /luna-panel.css`) и собирает страницу из его компонентов. Требования
+и готовый скелет страницы — в [WEB_PANELS.md](WEB_PANELS.md).
 
 ## Примечания по безопасности
 

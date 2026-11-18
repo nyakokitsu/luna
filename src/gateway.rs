@@ -460,6 +460,19 @@ struct WebSettings {
     ui: bool,
     #[serde(default = "default_true")]
     api: bool,
+    #[serde(default)]
+    network: WebNetworkSettings,
+}
+/// Permission for outbound HTTP(S) from the HTTP API. Off until both
+/// `enabled` and a non-empty `allow` host list are set.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct WebNetworkSettings {
+    #[serde(default)]
+    enabled: bool,
+    #[serde(default)]
+    allow: Vec<String>,
+    #[serde(default)]
+    allow_insecure_http: bool,
 }
 fn default_true() -> bool {
     true
@@ -469,6 +482,7 @@ impl Default for WebSettings {
         Self {
             ui: true,
             api: true,
+            network: WebNetworkSettings::default(),
         }
     }
 }
@@ -2235,7 +2249,7 @@ fn network_url_allowed(policy: &NetworkPolicy, value: &str) -> Result<Url> {
                 .is_some_and(|suffix| host.ends_with(&format!(".{suffix}")))
     });
     if !allowed {
-        bail!("URL host is not allowed by the package manifest")
+        bail!("URL host is not allowed")
     }
     Ok(url)
 }
@@ -2245,6 +2259,15 @@ fn http_request(
     url: &str,
     body: Option<String>,
 ) -> Result<(u16, String)> {
+    http_request_with_headers(policy, method, url, &[], body)
+}
+fn http_request_with_headers(
+    policy: &NetworkPolicy,
+    method: &str,
+    url: &str,
+    headers: &[(String, String)],
+    body: Option<String>,
+) -> Result<(u16, String)> {
     let url = network_url_allowed(policy, url)?;
     let method = reqwest::Method::from_bytes(method.as_bytes()).context("invalid HTTP method")?;
     let client = reqwest::blocking::Client::builder()
@@ -2252,16 +2275,70 @@ fn http_request(
         .timeout(Duration::from_secs(20))
         .redirect(reqwest::redirect::Policy::none())
         .build()?;
-    let response = client
-        .request(method, url)
-        .body(body.unwrap_or_default())
-        .send()?;
+    let mut request = client.request(method, url).body(body.unwrap_or_default());
+    for (name, value) in headers {
+        request = request.header(name.as_str(), value.as_str());
+    }
+    let response = request.send()?;
     let status = response.status().as_u16();
     let mut response_body = String::new();
     response
         .take(1_048_576)
         .read_to_string(&mut response_body)?;
     Ok((status, response_body))
+}
+/// Host allowlist entries are bare hosts: `example.org`, `*.example.org` or `*`.
+fn valid_network_host(host: &str) -> bool {
+    if host.is_empty() || host.len() > 255 || !host.is_ascii() {
+        return false;
+    }
+    if host == "*" {
+        return true;
+    }
+    let name = host.strip_prefix("*.").unwrap_or(host);
+    !name.is_empty()
+        && !name.starts_with('.')
+        && !name.ends_with('.')
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
+}
+/// Headers the API client may not set: the transport owns them, and a foreign
+/// `Host` would let a request address another virtual host on the same server.
+fn transport_header(name: &str) -> bool {
+    matches!(
+        name,
+        "host"
+            | "content-length"
+            | "connection"
+            | "transfer-encoding"
+            | "upgrade"
+            | "keep-alive"
+            | "te"
+            | "trailer"
+            | "proxy-authorization"
+            | "proxy-authenticate"
+    )
+}
+const API_HTTP_HEADER_LIMIT: usize = 32;
+const API_HTTP_BODY_LIMIT: usize = 1_048_576;
+fn validate_api_http_headers(headers: &BTreeMap<String, String>) -> Result<()> {
+    if headers.len() > API_HTTP_HEADER_LIMIT {
+        bail!("at most {API_HTTP_HEADER_LIMIT} request headers are allowed")
+    }
+    for (name, value) in headers {
+        if name.is_empty() || name.len() > 128 || !name.bytes().all(|byte| byte.is_ascii_graphic())
+        {
+            bail!("invalid request header name")
+        }
+        if transport_header(&name.to_ascii_lowercase()) {
+            bail!("request header cannot be set: {name}")
+        }
+        if value.len() > 8192 || value.chars().any(|c| c.is_control() && c != '\t') {
+            bail!("invalid value for request header {name}")
+        }
+    }
+    Ok(())
 }
 const QUASAR_CONFIG: &str = "/system/vendor/quasar/quasar.cfg";
 const IPC_MAX_FRAME_SIZE: usize = 10 * 1024 * 1024;
@@ -4753,6 +4830,15 @@ async fn start_package_locked(app: App, id: String, invocation_args: Vec<String>
 async fn index() -> Html<&'static str> {
     Html(UI)
 }
+async fn luna_panel_css() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "text/css; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
+        PANEL_CSS,
+    )
+}
 async fn custom_web(
     State(a): State<App>,
     AxumPath(id): AxumPath<String>,
@@ -4784,6 +4870,73 @@ async fn list_custom_web(State(a): State<App>) -> Json<Vec<CustomWebInfo>> {
         .collect();
     result.sort_by(|left, right| left.id.cmp(&right.id));
     Json(result)
+}
+#[derive(Debug, Deserialize)]
+struct ApiHttpRequest {
+    #[serde(default = "default_api_http_method")]
+    method: String,
+    url: String,
+    #[serde(default)]
+    headers: BTreeMap<String, String>,
+    #[serde(default)]
+    body: Option<String>,
+}
+fn default_api_http_method() -> String {
+    "GET".into()
+}
+#[derive(Debug, Serialize)]
+struct ApiHttpResponse {
+    status: u16,
+    body: String,
+}
+/// Proxy one HTTP(S) request from an API client. The browser page often cannot
+/// reach an external host itself while the station can, so Luna sends it.
+async fn api_http_request(
+    State(a): State<App>,
+    Json(request): Json<ApiHttpRequest>,
+) -> Result<Json<ApiHttpResponse>, ApiError> {
+    let network = a.settings.lock().await.web.network.clone();
+    if !network.enabled {
+        return Err(ApiError(anyhow!(
+            "outbound HTTP is disabled; set web.network.enabled = true"
+        )));
+    }
+    if network.allow.is_empty() {
+        return Err(ApiError(anyhow!(
+            "web.network.allow must list at least one host"
+        )));
+    }
+    let method = request.method.trim().to_ascii_uppercase();
+    if !matches!(
+        method.as_str(),
+        "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS"
+    ) {
+        return Err(ApiError(anyhow!(
+            "unsupported HTTP method: {}",
+            request.method
+        )));
+    }
+    if request
+        .body
+        .as_ref()
+        .is_some_and(|body| body.len() > API_HTTP_BODY_LIMIT)
+    {
+        return Err(ApiError(anyhow!("request body exceeds 1 MiB")));
+    }
+    validate_api_http_headers(&request.headers)?;
+    let policy = NetworkPolicy {
+        allow: network.allow,
+        allow_insecure_http: network.allow_insecure_http,
+    };
+    let url = request.url;
+    let headers: Vec<(String, String)> = request.headers.into_iter().collect();
+    let body = request.body;
+    let (status, body) = task::spawn_blocking(move || {
+        http_request_with_headers(&policy, &method, &url, &headers, body)
+    })
+    .await
+    .context("outbound HTTP worker")??;
+    Ok(Json(ApiHttpResponse { status, body }))
 }
 fn lua_permissions(settings: &LuaSettings) -> Vec<String> {
     let p = &settings.permissions;
@@ -6052,6 +6205,22 @@ async fn put_settings(
     if s.web.ui && !s.web.api {
         return Err(ApiError(anyhow!("web.ui requires web.api")));
     }
+    if s.web.network.allow.len() > 64 {
+        return Err(ApiError(anyhow!(
+            "web.network.allow lists more than 64 hosts"
+        )));
+    }
+    if let Some(host) = s
+        .web
+        .network
+        .allow
+        .iter()
+        .find(|host| !valid_network_host(host))
+    {
+        return Err(ApiError(anyhow!(
+            "invalid host in web.network.allow: {host}"
+        )));
+    }
     safe_relative(&s.lua.share_dir)?;
     if s.lua.share_dir.is_empty() || s.lua.max_runtime_seconds == 0 {
         return Err(ApiError(anyhow!(
@@ -6410,7 +6579,8 @@ pub async fn run_with_station(station: Option<StationSpec>) -> Result<()> {
     if web.ui {
         router = router
             .route("/", get(index))
-            .route("/web/:id", get(custom_web));
+            .route("/web/:id", get(custom_web))
+            .route("/luna-panel.css", get(luna_panel_css));
     }
     if web.api {
         router = router
@@ -6430,6 +6600,7 @@ pub async fn run_with_station(station: Option<StationSpec>) -> Result<()> {
             )
             .route("/api/plugins/sources", get(plugin_sources))
             .route("/api/custom-web", get(list_custom_web))
+            .route("/api/http", post(api_http_request))
             .route("/api/plugins/rescan", post(rescan_plugins))
             .route("/api/plugins/registry", post(install_registry))
             .route("/api/plugins/:id", delete(remove))
@@ -6787,6 +6958,7 @@ async fn stop_all_packages(app: &App) {
     }
 }
 const UI: &str = include_str!("../web/index.html");
+const PANEL_CSS: &str = include_str!("../web/luna-panel.css");
 
 #[cfg(test)]
 mod tests {
@@ -7441,6 +7613,34 @@ mod tests {
             allow_insecure_http: true,
         };
         assert!(network_url_allowed(&policy, "http://127.0.0.1/").is_err());
+    }
+
+    #[test]
+    fn api_http_permission_is_off_by_default() {
+        let settings = Settings::default();
+        assert!(!settings.web.network.enabled);
+        assert!(!settings.web.network.allow_insecure_http);
+        assert!(settings.web.network.allow.is_empty());
+    }
+
+    #[test]
+    fn api_http_headers_reject_transport_headers() {
+        let mut headers = BTreeMap::new();
+        headers.insert("Accept".to_string(), "application/json".to_string());
+        assert!(validate_api_http_headers(&headers).is_ok());
+        headers.insert("Host".to_string(), "example.org".to_string());
+        assert!(validate_api_http_headers(&headers).is_err());
+    }
+
+    #[test]
+    fn api_network_allow_hosts_are_validated() {
+        assert!(valid_network_host("api.example.org"));
+        assert!(valid_network_host("*.example.org"));
+        assert!(valid_network_host("*"));
+        assert!(!valid_network_host(""));
+        assert!(!valid_network_host("https://example.org"));
+        assert!(!valid_network_host("example.org:8080"));
+        assert!(!valid_network_host("*.example.org/path"));
     }
 
     #[test]

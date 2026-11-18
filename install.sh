@@ -1,99 +1,283 @@
 #!/bin/sh
 set -eu
-log() { printf '[%s] %s\n' "$(date '+%H:%M:%S')" "$*" >&2; }
 
 VERSION=${LUNA_VERSION:-latest}
 PLATFORM=${LUNA_PLATFORM:-}
 BOOT_HOOK=1
 LISTEN=${LUNA_LISTEN:-127.0.0.1:8100}
 UNINSTALL=0
+QUIET=0
+
+usage() {
+  cat <<'USAGE'
+Luna installer — runtime для станций Яндекса.
+
+Использование:
+  install.sh [VERSION] [параметры]
+
+Аргументы:
+  VERSION                тег релиза (по умолчанию latest)
+
+Параметры:
+  -p, --platform NAME    платформа станции, если автодетект не нужен
+      --listen ADDR      адрес API (по умолчанию 127.0.0.1:8100)
+      --no-boot-hook     ставить только в /data, без /etc/init.d
+      --uninstall        удалить Luna со станции
+  -q, --quiet            показывать только предупреждения и ошибки
+  -h, --help             эта справка
+
+Переменные окружения:
+  ADB_SERIAL             серийный номер станции, если подключено несколько
+  LUNA_VERSION           тег релиза
+  LUNA_PLATFORM          платформа станции
+  LUNA_LISTEN            адрес API
+  LUNA_REMOTE_ROOT       каталог установки (по умолчанию /data/quazar/luna)
+  LUNA_REPOSITORY        репозиторий релизов
+  NO_COLOR               отключить цвета
+
+Примеры:
+  sh install.sh
+  ADB_SERIAL=xyz sh install.sh --platform yandexmini3
+  sh install.sh 0.2.8 --listen 127.0.0.1:8099
+  sh install.sh --uninstall
+USAGE
+}
+
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --platform|-p)
-      [ "$#" -ge 2 ] || { echo "$1 requires a value" >&2; exit 2; }
+      [ "$#" -ge 2 ] || { echo "option $1 requires a value" >&2; exit 2; }
       PLATFORM=$2; shift 2 ;;
     --no-boot-hook) BOOT_HOOK=0; shift ;;
-    --listen) [ "$#" -ge 2 ] || exit 2; LISTEN=$2; shift 2 ;;
+    --listen)
+      [ "$#" -ge 2 ] || { echo "option $1 requires a value" >&2; exit 2; }
+      LISTEN=$2; shift 2 ;;
     --version)
-      [ "$#" -ge 2 ] || { echo "$1 requires a value" >&2; exit 2; }
+      [ "$#" -ge 2 ] || { echo "option $1 requires a value" >&2; exit 2; }
       VERSION=$2; shift 2 ;;
-    --uninstall)
-      UNINSTALL=1; shift ;;
-    --help|-h)
-      echo "Usage: $0 [VERSION] [--platform DEVICE] [--no-boot-hook] [--listen HOST:PORT] [--uninstall]"; exit 0 ;;
+    --uninstall) UNINSTALL=1; shift ;;
+    --quiet|-q) QUIET=1; shift ;;
+    --help|-h) usage; exit 0 ;;
     -*)
-      echo "Unknown option: $1" >&2; exit 2 ;;
+      echo "unknown option: $1" >&2
+      echo "run $0 --help for usage" >&2
+      exit 2 ;;
     *)
       if [ "$VERSION" = "latest" ] && [ -z "${LUNA_VERSION:-}" ]; then
         VERSION=$1
       elif [ -z "$PLATFORM" ]; then
         PLATFORM=$1
       else
-        echo "Unexpected argument: $1" >&2; exit 2
+        echo "unexpected argument: $1" >&2
+        exit 2
       fi
       shift ;;
   esac
 done
+
 REPOSITORY=${LUNA_REPOSITORY:-https://github.com/nyakokitsu/luna}
 ROOT=${LUNA_REMOTE_ROOT:-/data/quazar/luna}
 SERIAL=${ADB_SERIAL:-}
-case "$LISTEN" in ''|*[!A-Za-z0-9_.:-]*) echo "invalid listen address" >&2; exit 2 ;; esac
-case "$ROOT" in ''|*[!A-Za-z0-9_./-]*) echo "invalid remote root" >&2; exit 2 ;; esac
+case "$LISTEN" in ''|*[!A-Za-z0-9_.:-]*) echo "invalid listen address: $LISTEN" >&2; exit 2 ;; esac
+case "$ROOT" in ''|*[!A-Za-z0-9_./-]*) echo "invalid remote root: $ROOT" >&2; exit 2 ;; esac
+
+# --- оформление вывода -------------------------------------------------------
+if [ "$QUIET" -eq 0 ] && [ -t 2 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-}" != dumb ]; then
+  STYLE=1
+else
+  STYLE=0
+fi
+if [ "$STYLE" -eq 1 ]; then
+  BOLD=$(printf '\033[1m'); DIM=$(printf '\033[2m'); RED=$(printf '\033[31m')
+  GREEN=$(printf '\033[32m'); YELLOW=$(printf '\033[33m'); BLUE=$(printf '\033[34m'); NC=$(printf '\033[0m')
+else
+  BOLD=''; DIM=''; RED=''; GREEN=''; YELLOW=''; BLUE=''; NC=''
+fi
+case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
+  *UTF-8*|*utf8*|*UTF8*) UNICODE=1 ;;
+  *) UNICODE=0 ;;
+esac
+BULLET='-'
+BAR_FULL='#'
+BAR_EMPTY='.'
+if [ "$UNICODE" -eq 1 ]; then
+  BULLET=$(printf '\342\200\272')
+  BAR_FULL=$(printf '\342\226\210')
+  BAR_EMPTY=$(printf '\342\226\221')
+fi
+
+STEP_TOTAL=7
+STEP_INDEX=0
+STEP_START=0
+TOTAL_START=$(date +%s)
+PROGRESS_OPEN=0
+
+say() { [ "$QUIET" -eq 1 ] || printf '%s\n' "$*" >&2; }
+info() { [ "$QUIET" -eq 1 ] || printf '   %s%s%s %s\n' "$DIM" "$BULLET" "$NC" "$*" >&2; }
+warn() { printf '   %s!%s %s\n' "$YELLOW" "$NC" "$*" >&2; }
+die() {
+  code=${2:-1}
+  [ "$PROGRESS_OPEN" -eq 1 ] && printf '\n' >&2
+  printf '%serror:%s %s\n' "$RED" "$NC" "$1" >&2
+  exit "$code"
+}
+stage() {
+  STEP_INDEX=$((STEP_INDEX + 1))
+  STEP_START=$(date +%s)
+  [ "$QUIET" -eq 1 ] && return 0
+  printf '\n%s[%d/%d]%s %s%s%s\n' "$DIM" "$STEP_INDEX" "$STEP_TOTAL" "$NC" "$BOLD" "$1" "$NC" >&2
+}
+stage_done() {
+  [ "$QUIET" -eq 1 ] && return 0
+  took=$(( $(date +%s) - STEP_START ))
+  printf '   %sok%s %s%s%s\n' "$GREEN" "$NC" "$DIM" "(${took}s)" "$NC" >&2
+}
+human_size() {
+  awk -v n="${1:-0}" 'BEGIN{u[1]="B";u[2]="KB";u[3]="MB";u[4]="GB";i=1;while(n>=1024&&i<4){n/=1024;i++};if(i==1)printf "%d %s",n,u[i];else printf "%.1f %s",n,u[i]}'
+}
+progress_line() {
+  current=$1; total=$2; label=$3
+  width=26
+  if [ "$total" -gt 0 ] 2>/dev/null; then
+    percent=$((current * 100 / total))
+  else
+    percent=0
+  fi
+  [ "$percent" -gt 100 ] && percent=100
+  filled=$((percent * width / 100))
+  bar=''
+  i=0
+  while [ "$i" -lt "$width" ]; do
+    if [ "$i" -lt "$filled" ]; then bar="$bar$BAR_FULL"; else bar="$bar$BAR_EMPTY"; fi
+    i=$((i + 1))
+  done
+  PROGRESS_OPEN=1
+  if [ "$total" -gt 0 ] 2>/dev/null; then
+    printf '\r   %s %s %3d%% %s / %s%s' "$label" "$bar" "$percent" "$(human_size "$current")" "$(human_size "$total")" "$NC" >&2
+  else
+    printf '\r   %s %s %s%s' "$label" "$bar" "$(human_size "$current")" "$NC" >&2
+  fi
+}
+
+TMP=''
+cleanup() {
+  status=$?
+  [ "$PROGRESS_OPEN" -eq 1 ] && printf '\n' >&2
+  [ -z "$TMP" ] || rm -rf "$TMP"
+  if [ "$status" -ne 0 ] && [ "$status" -ne 130 ]; then
+    printf '%sinstallation failed%s %s(exit %d)%s\n' "$RED" "$NC" "$DIM" "$status" "$NC" >&2
+  fi
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 case "$VERSION" in
   latest) URL="$REPOSITORY/releases/latest/download" ;;
   v*) URL="$REPOSITORY/releases/download/$VERSION" ;;
   *) URL="$REPOSITORY/releases/download/v$VERSION" ;;
 esac
-for tool in adb; do command -v "$tool" >/dev/null || { echo "$tool is required" >&2; exit 4; }; done
-if [ "$UNINSTALL" -eq 0 ]; then
-  command -v python3 >/dev/null || { echo "python3 is required" >&2; exit 4; }
-  if command -v curl >/dev/null 2>&1; then DOWNLOAD=curl; elif command -v wget >/dev/null 2>&1; then DOWNLOAD=wget; else echo "curl or wget is required" >&2; exit 4; fi
-fi
 
+[ "$QUIET" -eq 1 ] || {
+  printf '\n%sLuna installer%s %s%s%s\n' "$BOLD" "$NC" "$DIM" "version $VERSION" "$NC" >&2
+  printf '   %s%s%s\n' "$DIM" "$URL" "$NC" >&2
+}
+
+STEP_TOTAL=7
+[ "$UNINSTALL" -eq 1 ] && STEP_TOTAL=3
+
+stage "Проверяем окружение"
+command -v adb >/dev/null || die "adb не найден. Установите Android Platform Tools." 4
+if [ "$UNINSTALL" -eq 0 ]; then
+  command -v python3 >/dev/null || die "python3 не найден" 4
+  if command -v curl >/dev/null 2>&1; then DOWNLOAD=curl
+  elif command -v wget >/dev/null 2>&1; then DOWNLOAD=wget
+  else die "нужен curl или wget" 4; fi
+  info "инструменты: adb, python3, $DOWNLOAD"
+fi
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/luna-install.XXXXXX")
-trap 'rm -rf "$TMP"' EXIT HUP INT TERM
+
 download() {
-  if [ "$DOWNLOAD" = curl ]; then curl -fL --proto '=https,http' --tlsv1.2 "$1" -o "$2"; else wget -O "$2" "$1"; fi
+  url=$1; dest=$2; label=${3:-file}
+  total=0
+  if [ "$STYLE" -eq 1 ]; then
+    if [ "$DOWNLOAD" = curl ]; then
+      total=$(curl -fsIL --proto '=https,http' --tlsv1.2 "$url" 2>/dev/null |
+        awk 'tolower($1) == "content-length:" { gsub("\r", "", $2); size = $2 } END { print size + 0 }')
+    else
+      total=$(wget --spider -S "$url" 2>&1 |
+        awk 'tolower($1) == "content-length:" { gsub("\r", "", $2); size = $2 } END { print size + 0 }')
+    fi
+    case "$total" in ''|*[!0-9]*) total=0 ;; esac
+    if [ "$DOWNLOAD" = curl ]; then
+      curl -fsSL --proto '=https,http' --tlsv1.2 "$url" -o "$dest" &
+    else
+      wget -q -O "$dest" "$url" &
+    fi
+    pid=$!
+    while kill -0 "$pid" 2>/dev/null; do
+      current=$(wc -c <"$dest" 2>/dev/null || printf 0)
+      progress_line "$current" "$total" "$label"
+      sleep 0.2 2>/dev/null || sleep 1
+    done
+    wait "$pid" || { printf '\n' >&2; PROGRESS_OPEN=0; die "не удалось скачать $url" 8; }
+    current=$(wc -c <"$dest" 2>/dev/null || printf 0)
+    progress_line "$current" "$total" "$label"
+    printf '\n' >&2
+    PROGRESS_OPEN=0
+  else
+    if [ "$DOWNLOAD" = curl ]; then
+      curl -fsSL --proto '=https,http' --tlsv1.2 "$url" -o "$dest" || die "не удалось скачать $url" 8
+    else
+      wget -q -O "$dest" "$url" || die "не удалось скачать $url" 8
+    fi
+    info "$label: $(human_size "$(wc -c <"$dest")")"
+  fi
 }
-verify() {
-  expected=$(awk -v name="$(basename "$1")" '$2 == name {print $1}' "$TMP/SHA256SUMS")
-  if command -v sha256sum >/dev/null 2>&1; then actual=$(sha256sum "$1" | awk '{print $1}')
-  elif command -v shasum >/dev/null 2>&1; then actual=$(shasum -a 256 "$1" | awk '{print $1}')
-  else actual=$(openssl dgst -sha256 "$1" | awk '{print $NF}'); fi
-  [ "$actual" = "$expected" ] || { echo "checksum mismatch: $1" >&2; exit 5; }
-}
+stage_done
+
+stage "Подключаемся к станции"
 if [ -z "$SERIAL" ]; then
   devices=$(adb devices </dev/null | awk 'NR > 1 && $2 == "device" {print $1}')
   count=$(printf '%s\n' "$devices" | sed '/^\s*$/d' | wc -l | tr -d ' ')
-  [ "$count" -gt 0 ] || { echo "No ADB station found." >&2; exit 6; }
-  if [ "$count" -eq 1 ]; then SERIAL=$(printf '%s\n' "$devices" | head -n 1)
+  [ "$count" -gt 0 ] || die "не найдено ни одной станции по ADB" 6
+  if [ "$count" -eq 1 ]; then
+    SERIAL=$(printf '%s\n' "$devices" | head -n 1)
   else
-    echo "$devices" | awk '{printf "%d) %s\n", NR, $1}' >&2
-    printf "Station number: " >&2; read -r n < /dev/tty
+    [ "$QUIET" -eq 1 ] || printf '%s\n' "$devices" | awk '{printf "   %d) %s\n", NR, $1}' >&2
+    printf '   выберите станцию: ' >&2
+    read -r n </dev/tty
     SERIAL=$(printf '%s\n' "$devices" | sed -n "${n}p")
+    [ -n "$SERIAL" ] || die "станция с номером $n не найдена" 6
   fi
 fi
-adb -s "$SERIAL" get-state </dev/null | grep -qx device || { echo "ADB station is offline" >&2; exit 6; }
-log "Connected to station $SERIAL"
+adb -s "$SERIAL" get-state </dev/null 2>/dev/null | grep -qx device || die "станция $SERIAL не отвечает" 6
+info "станция: $SERIAL"
+stage_done
 
 if [ "$UNINSTALL" -eq 1 ]; then
+  stage "Удаляем Luna"
   REMOTE="$TMP/remote.sh"
   cat >"$REMOTE" <<'REMOTE'
 set -eu
 root="$LUNA_ROOT"; init=/etc/init.d/S99luna
-[ -x "$init" ] && "$init" stop || true
+if [ -x "$init" ]; then "$init" stop || true; fi
 rm -f "$init" "$root/bin/luna" "$root/bin/luna.previous" "$root/luna.pid"
 echo "Luna removed"
 REMOTE
-  adb -s "$SERIAL" shell "LUNA_ROOT='$ROOT' sh -s" <"$REMOTE"
-  log "Luna removed from $SERIAL"
+  adb -s "$SERIAL" shell "LUNA_ROOT='$ROOT' sh -s" <"$REMOTE" || die "удалённая остановка не удалась" 9
+  stage_done
+  say ""
+  say "Luna удалена со станции $SERIAL"
   exit 0
 fi
 
-log "Downloading release metadata"
-download "$URL/SHA256SUMS" "$TMP/SHA256SUMS"
-download "$URL/manifest.json" "$TMP/manifest.json"
+stage "Скачиваем метаданные релиза"
+download "$URL/SHA256SUMS" "$TMP/SHA256SUMS" "SHA256SUMS"
+download "$URL/manifest.json" "$TMP/manifest.json" "manifest.json"
+stage_done
+
+stage "Определяем станцию"
 adb_optional() { adb -s "$SERIAL" shell "$1" </dev/null 2>/dev/null || true; }
 
 detect_dt_platform() {
@@ -115,22 +299,21 @@ detect_dt_platform() {
 }
 
 if [ -n "$PLATFORM" ]; then
-  log "Using explicitly provided platform: $PLATFORM"
   TARGET="$PLATFORM"
   EXPLICIT=1
+  info "платформа задана явно: $PLATFORM"
 else
-  log "Detecting station"
   TARGET=$(detect_dt_platform || true)
   if [ -n "$TARGET" ]; then
-    log "Auto-detected platform from device-tree: $TARGET"
+    info "платформа из device-tree: $TARGET"
   else
     TARGET=$(adb_optional 'uname -n' | tr -d '\r')
-    log "Auto-detected hostname: $TARGET"
+    info "имя хоста станции: $TARGET"
   fi
   EXPLICIT=0
 fi
 
-[ -n "$TARGET" ] || { echo "Could not detect platform or hostname" >&2; exit 7; }
+[ -n "$TARGET" ] || die "не удалось определить платформу или имя хоста" 7
 
 RECORD=$(python3 - "$TMP/manifest.json" "$TARGET" "$EXPLICIT" <<'PY'
 import json, re, sys
@@ -162,17 +345,29 @@ if len(found) != 1: sys.exit(1)
 e = found[0]
 print("\t".join((e["device"], e["asset"], e.get("codename", ""))))
 PY
-) || { echo "Unsupported or ambiguous station: $TARGET" >&2; exit 7; }
+) || die "станция не поддерживается или определяется неоднозначно: $TARGET" 7
 
 IFS="$(printf '\t')" read -r DEVICE ASSET CODENAME <<EOF
 $RECORD
 EOF
-echo "Selected $DEVICE${CODENAME:+ ($CODENAME)} for $TARGET" >&2
-log "Downloading $ASSET"
-download "$URL/$ASSET" "$TMP/$ASSET"
-log "Verifying checksum"
-verify "$TMP/$ASSET"
+info "модель: $DEVICE${CODENAME:+ ($CODENAME)}"
+stage_done
 
+stage "Скачиваем $ASSET"
+download "$URL/$ASSET" "$TMP/$ASSET" "$ASSET"
+stage_done
+
+stage "Проверяем контрольную сумму"
+expected=$(awk -v name="$(basename "$TMP/$ASSET")" '$2 == name {print $1}' "$TMP/SHA256SUMS")
+[ -n "$expected" ] || die "в SHA256SUMS нет записи для $ASSET" 5
+if command -v sha256sum >/dev/null 2>&1; then actual=$(sha256sum "$TMP/$ASSET" | awk '{print $1}')
+elif command -v shasum >/dev/null 2>&1; then actual=$(shasum -a 256 "$TMP/$ASSET" | awk '{print $1}')
+else actual=$(openssl dgst -sha256 "$TMP/$ASSET" | awk '{print $NF}'); fi
+[ "$actual" = "$expected" ] || die "контрольная сумма не совпала для $ASSET" 5
+info "sha256: $expected"
+stage_done
+
+stage "Устанавливаем на станцию"
 REMOTE="$TMP/remote.sh"
 cat >"$REMOTE" <<'REMOTE'
 set -eu
@@ -226,9 +421,19 @@ kill -0 "$pid" 2>/dev/null || { cat "$logfile" 2>/dev/null || true; exit 1; }
 REMOTE
 sed "s|__LUNA_ROOT__|$ROOT|g; s|__LUNA_LISTEN__|$LISTEN|g" "$REMOTE" >"$REMOTE.configured"
 mv "$REMOTE.configured" "$REMOTE"
-adb -s "$SERIAL" shell "mkdir -p '$ROOT/bin'" >/dev/null
-log "Uploading $ASSET to $ROOT"
-adb -s "$SERIAL" push "$TMP/$ASSET" "$ROOT/bin/luna.new" </dev/null >/dev/null
-log "Starting Luna on the station"
-adb -s "$SERIAL" shell "LUNA_ROOT='$ROOT' LUNA_LISTEN='$LISTEN' LUNA_BOOT_HOOK='$BOOT_HOOK' sh -s" <"$REMOTE"
-log "Luna installed: $DEVICE ($CODENAME), API $LISTEN"
+adb -s "$SERIAL" shell "mkdir -p '$ROOT/bin'" </dev/null >/dev/null || die "не удалось создать $ROOT/bin" 9
+info "загрузка $(human_size "$(wc -c <"$TMP/$ASSET")") в $ROOT/bin"
+adb -s "$SERIAL" push "$TMP/$ASSET" "$ROOT/bin/luna.new" </dev/null >/dev/null || die "adb push не удался" 9
+adb -s "$SERIAL" shell "LUNA_ROOT='$ROOT' LUNA_LISTEN='$LISTEN' LUNA_BOOT_HOOK='$BOOT_HOOK' sh -s" <"$REMOTE" ||
+  die "удалённая установка завершилась ошибкой" 9
+stage_done
+
+total=$(( $(date +%s) - TOTAL_START ))
+if [ "$QUIET" -eq 0 ]; then
+  printf '\n%sLuna установлена%s %s(%ss)%s\n' "$BOLD" "$NC" "$DIM" "$total" "$NC" >&2
+  printf '   станция: %s%s%s\n' "$BOLD" "$DEVICE${CODENAME:+ ($CODENAME)}" "$NC" >&2
+  printf '   версия:  %s\n' "$VERSION" >&2
+  printf '   API:     http://%s/api\n' "$LISTEN" >&2
+  printf '   данные:  %s/data\n' "$ROOT" >&2
+  printf '   лог:     %s/luna.log\n\n' "$ROOT" >&2
+fi

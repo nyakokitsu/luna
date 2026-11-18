@@ -221,6 +221,11 @@ aside{position:fixed;z-index:30;left:0;top:0;width:272px;transform:translateX(-1
       <label class="fld">Input devices<input class="in" id="setting-input-devices" placeholder="через запятую"></label>
       <label class="fld">IPC services<input class="in" id="setting-ipc-services" placeholder="через запятую"></label>
       <label class="fld">Command phrases<input class="in" id="setting-command-phrases" placeholder="через запятую"></label></div></div>
+    <div class="card"><h3>Внешние запросы API</h3>
+      <p class="mut">POST /api/http: станция отправляет запрос за панель. Без разрешения и списка хостов запросы отклоняются.</p>
+      <label class="sw"><span>Разрешить HTTP-запросы из API</span><input id="setting-web-net" type="checkbox"></label>
+      <label class="sw"><span>Разрешить незащищённый http://</span><input id="setting-web-net-http" type="checkbox"></label>
+      <div class="g2"><label class="fld">Разрешённые хосты<input class="in" id="setting-web-net-allow" placeholder="api.example.org, *.example.org"></label></div></div>
     <div id="sv"><span>Есть несохранённые изменения</span><span class="row" style="gap:8px"><button class="btn" id="s-reset">Отменить</button><button class="btn pri" id="s-save">Сохранить</button></span></div>
   </div>
 
@@ -478,6 +483,7 @@ function splitValue(v){return v.split(',').map(i=>i.trim()).filter(Boolean)}
 function check(id,v){document.getElementById(id).checked=v===true}
 function fillSettings(s){
   const lua=s.lua||{},perm=lua.permissions||{},led=s.led||{};
+  const wnet=(s.web&&s.web.network)||{};
   check('setting-binaries',s.allow_plugin_binaries===true);
   check('setting-updates',!s.updates||s.updates.enabled!==false);
   check('setting-lua-enabled',lua.enabled===true);
@@ -489,6 +495,9 @@ function fillSettings(s){
   $('#setting-led-root').value=led.sysfs_root||'/sys/class/leds';
   $$('[data-permission]').forEach(i=>{i.checked=perm[i.dataset.permission]===true});
   $('#setting-network-allow').value=listValue(lua.network_allow);
+  check('setting-web-net',wnet.enabled===true);
+  check('setting-web-net-http',wnet.allow_insecure_http===true);
+  $('#setting-web-net-allow').value=listValue(wnet.allow);
   $('#setting-input-devices').value=listValue(lua.input_devices);
   $('#setting-ipc-services').value=listValue(lua.ipc_services);
   $('#setting-command-phrases').value=listValue(lua.command_phrases);
@@ -497,6 +506,7 @@ function fillSettings(s){
 function readSettings(){
   const s=JSON.parse(JSON.stringify(settingsState));
   s.led=s.led||{};s.updates=s.updates||{};s.lua=s.lua||{};s.lua.permissions=s.lua.permissions||{};
+  s.web=s.web||{};s.web.network=s.web.network||{};
   s.allow_plugin_binaries=$('#setting-binaries').checked;
   s.updates.enabled=$('#setting-updates').checked;
   s.led.profile=$('#setting-led-profile').value;
@@ -508,6 +518,9 @@ function readSettings(){
   s.lua.share_dir=$('#setting-lua-share').value;
   $$('[data-permission]').forEach(i=>{s.lua.permissions[i.dataset.permission]=i.checked});
   s.lua.network_allow=splitValue($('#setting-network-allow').value);
+  s.web.network.enabled=$('#setting-web-net').checked;
+  s.web.network.allow_insecure_http=$('#setting-web-net-http').checked;
+  s.web.network.allow=splitValue($('#setting-web-net-allow').value);
   s.lua.input_devices=splitValue($('#setting-input-devices').value);
   s.lua.ipc_services=splitValue($('#setting-ipc-services').value);
   s.lua.command_phrases=splitValue($('#setting-command-phrases').value);
@@ -537,6 +550,8 @@ GET /room
 PUT /room {"room":"Кухня"}
 PUT /device {"model":"yandexmini3","architecture":"aarch64","features":[]}
 GET /sensors
+# Внешние запросы
+POST /http {"method":"GET","url":"https://example.org"}
 # LED
 POST /led {"colors":["#FF0000"]}
 POST /led/ring {"colors":["#FF0000","#0000FF"]}
