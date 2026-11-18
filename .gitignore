@@ -4,3 +4,5 @@
 # Local release helper; do not publish it.
 /tools/release.sh
 /.luna-last-release
+
+.DS_Store

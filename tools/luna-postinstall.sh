@@ -50,6 +50,8 @@ data="\$var/luna/data"
 pidfile="\$var/luna/luna.pid"
 logfile="\$var/luna/luna.log"
 listen='$listen'
+mount -o remount,rw /
+ln -sf /system/vendor/quasar/libs/libasound.so.2 /lib/libasound.so.2
 
 case "\${1:-start}" in
 start)
