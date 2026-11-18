@@ -8002,6 +8002,8 @@ mod lifecycle_tests {
         settings.allow_plugin_binaries = true;
         let app = App {
             root,
+            started: Instant::now(),
+            diagnostics: crate::telemetry::Counters::default(),
             settings: Arc::new(Mutex::new(settings)),
             device: Arc::new(Mutex::new(DeviceProfile {
                 model: "test".into(),

@@ -87,6 +87,9 @@ jobs:
             echo "ok $page"
           done
 
+      - name: Plugin full-area layout regression
+        run: node tests/web_full_area.cjs web/index.html
+
   stations:
     name: Station list
     runs-on: ubuntu-latest
