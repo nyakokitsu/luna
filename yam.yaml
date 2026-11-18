@@ -1,5 +1,5 @@
 name: yam/luna
-version: 0.2.30
+version: 0.2.31
 license: MIT
 description: Luna - удобный и понятный фреймворк для разработчиков модов. С его помощью вы можете не беспокоится о том, будет ли работать ваш мод на той или иной станции.
 provides: [luna-yam-binary-host, luna-binary-dependencies-v1]
