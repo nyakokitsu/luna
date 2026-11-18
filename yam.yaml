@@ -1,7 +1,7 @@
 name: yam/luna
 version: 0.2.30
 license: MIT
-description: Luna host runtime for Lua, Quasar and legacy plugins
+description: Luna - удобный и понятный фреймворк для разработчиков модов. С его помощью вы можете не беспокоится о том, будет ли работать ваш мод на той или иной станции.
 provides: [luna-yam-binary-host, luna-binary-dependencies-v1]
 targets: [yandexmini, yandexmicro, yandexmini_2, yandexmini3, yandexmidi, yandexplum, yandexstation_2, pickle, mango, orion]
 files:
