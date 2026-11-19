@@ -24,7 +24,7 @@ code,kbd,.mono{font-family:var(--mono);font-size:13px}
 hr{border:0;border-top:1px solid var(--line);margin:18px 0}
 
 /* Сетка страницы: заголовок + карточки, без собственного сайдбара. */
-.wrap{max-width:920px;margin:0 auto;padding:20px 28px 80px}
+.wrap{max-width:none;width:100%;margin:0 auto;padding:20px 28px 80px}
 .wrap>.head{margin:0 0 18px}
 .wrap>.head h1{margin-bottom:4px}
 .card{background:var(--surf);border:1px solid var(--line);border-radius:16px;padding:24px;margin:0 0 18px}

@@ -8060,7 +8060,7 @@ mod lifecycle_tests {
         let app = App {
             root,
             started: Instant::now(),
-            diagnostics: Default::default(),
+            diagnostics: crate::telemetry::Counters::default(),
             settings: Arc::new(Mutex::new(settings)),
             device: Arc::new(Mutex::new(DeviceProfile {
                 model: "test".into(),

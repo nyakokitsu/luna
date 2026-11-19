@@ -113,7 +113,9 @@ pre.ok{color:var(--ok)}pre.bad{color:var(--bad)}
 .path-preview{font:12.5px var(--mono);color:var(--mut);padding:6px 10px;background:var(--bg);border:1px solid var(--line);border-radius:8px}
 .path-preview b{color:var(--text);font-weight:500}
 
-#frame{display:block;width:100%;height:calc(100vh - 130px);min-height:480px;border:1px solid var(--line);border-radius:16px;background:var(--surf)}
+/* The host owns the full plugin area; the panel keeps its own document. */
+#v-plugin{max-width:none;width:100%;margin:0;padding:0}
+#frame{display:block;width:100%;height:calc(100vh - 76px);min-height:1px;border:0;border-radius:0;background:var(--bg)}
 #v-plugin{max-width:none}
 #sv{position:sticky;bottom:18px;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 12px 10px 18px;margin-top:8px;background:var(--text);color:var(--bg);border-radius:14px;box-shadow:0 10px 30px rgba(0,0,0,.25);opacity:0;transform:translateY(140%);pointer-events:none;transition:transform .3s var(--ease),opacity .2s}
 #sv.show{opacity:1;transform:none;pointer-events:auto}
@@ -276,7 +278,7 @@ const ic=n=>'<svg class="i"><use href="#i-'+n+'"/></svg>';
 let settingsState={},dev=null,snap='',installedPluginIds=[];
 
 function toast(t,k){const e=document.createElement('div');e.className='toast '+(k||'');e.textContent=t;$('#toasts').append(e);setTimeout(()=>{e.classList.add('out');setTimeout(()=>e.remove(),260)},3200)}
-function applyTheme(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('luna-theme',t)}catch(_){}$('#theme').innerHTML=ic(t==='dark'?'sun':'moon');$('#theme').title=t==='dark'?'Светлая тема':'Тёмная тема'}
+function applyTheme(t){document.documentElement.dataset.theme=t;try{const d=$('#frame').contentDocument;if(d)d.documentElement.dataset.theme=t}catch(_){}try{localStorage.setItem('luna-theme',t)}catch(_){}$('#theme').innerHTML=ic(t==='dark'?'sun':'moon');$('#theme').title=t==='dark'?'Светлая тема':'Тёмная тема'}
 function pretty(v){try{return JSON.stringify(JSON.parse(v),null,2)}catch(_){return v||'(пустой ответ)'}}
 async function fetchApi(path,options){options=options||{};options.headers=Object.assign({'X-Luna-Local':'1'},options.headers);const response=await fetch(api+path,options);const text=await response.text();return{response:response,text:text}}
 function testJson(t){try{return JSON.parse(t)}catch(_){return null}}
@@ -297,6 +299,39 @@ function route(){
   if(pid){const p=plugins.find(x=>x.id===pid);const f=$('#frame');if(p&&f.getAttribute('src')!==p.url)f.src=p.url}
   $('#app').classList.remove('open');window.scrollTo(0,0);
 }
+
+// Keep customweb registration and document isolation, but use the outer page's
+// scrollbar. Observe content rather than the iframe viewport, so it can shrink.
+let panelObserver=null,panelResizeFrame=0;
+function resizePanel(){
+  cancelAnimationFrame(panelResizeFrame);
+  panelResizeFrame=requestAnimationFrame(()=>{
+    const f=$('#frame'),view=$('#v-plugin');
+    if(!f||!view.classList.contains('on'))return;
+    try{
+      const doc=f.contentDocument,root=doc&&doc.querySelector('.wrap');
+      if(!root)return;
+      const minimum=Math.max(1,window.innerHeight-$('.top').getBoundingClientRect().height);
+      const content=Math.ceil(root.getBoundingClientRect().height);
+      const height=Math.max(minimum,content);
+      if(f.style.height!==height+'px')f.style.height=height+'px';
+    }catch(_){/* Cross-origin documents retain their normal isolated frame. */}
+  });
+}
+$('#frame').addEventListener('load',()=>{
+  if(panelObserver){panelObserver.disconnect();panelObserver=null;}
+  try{
+    const doc=$('#frame').contentDocument,root=doc&&doc.querySelector('.wrap');
+    if(!root)return;
+    doc.documentElement.dataset.theme=document.documentElement.dataset.theme;
+    panelObserver=new ResizeObserver(resizePanel);
+    panelObserver.observe(root);
+    resizePanel();
+  }catch(_){}
+});
+window.addEventListener('resize',resizePanel);
+window.addEventListener('hashchange',resizePanel);
+
 window.addEventListener('hashchange',route);
 $('#menu').onclick=()=>$('#app').classList.add('open');
 $('#scrim').onclick=()=>$('#app').classList.remove('open');
