@@ -67,7 +67,11 @@ fn verified_build(build: &str, compatible: &[u8]) -> bool {
     {
         return true;
     }
-    if build == "0.369.1.46.4793643989.20261020.299" {
+    if matches!(
+        build,
+        "0.369.1.46.4793643989.20261020.299"
+            | "0.369.1.46.4778262943.20261013.299"
+    ) {
         return compatible
             .split(|byte| *byte == 0)
             .any(|entry| entry == b"yandex,station-mini2");
@@ -432,15 +436,20 @@ mod tests {
 
     #[test]
     fn mini2_046_requires_exact_firmware_and_dt_entry() {
+        for build in [
+            "0.369.1.46.4793643989.20261020.299",
+            "0.369.1.46.4778262943.20261013.299",
+        ] {
+            assert!(verified_build(
+                build,
+                b"yandex,station-mini2\0amlogic,axg\0"
+            ));
+            assert!(verified_build(
+                build,
+                b"amlogic,axg\0yandex,station-mini2\0"
+            ));
+        }
         let build = "0.369.1.46.4793643989.20261020.299";
-        assert!(verified_build(
-            build,
-            b"yandex,station-mini2\0amlogic,axg\0"
-        ));
-        assert!(verified_build(
-            build,
-            b"amlogic,axg\0yandex,station-mini2\0"
-        ));
         for compatible in [
             &b""[..],
             &b"yandex,station-mini\0"[..],
