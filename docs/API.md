@@ -103,9 +103,14 @@ curl "$BASE/device"
     "ring_count": 24,
     "has_logo": true,
     "logo_count": 6
-  }
+  },
+  "room": "Кухня",
+  "uptime_s": 309600
 }
 ```
+
+`uptime_s` — сколько секунд работает процесс Luna, `room` — локальная метка
+станции (`null`, если не задана).
 
 ### `GET /api/room`
 

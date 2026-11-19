@@ -65,6 +65,55 @@ textarea.in{font:13px/1.5 var(--mono);resize:vertical;min-height:64px}
 #logo{fill:var(--surf2);stroke:var(--line);stroke-width:1.2;transition:fill .4s,filter .4s,stroke .4s}
 .logo-seg{fill:var(--surf2);stroke:var(--line);stroke-width:1;transition:fill .4s,filter .4s,stroke .4s}
 
+/* Overview: состояние, фото станции и быстрые действия */
+.ov-status{display:flex;align-items:flex-start;gap:18px;justify-content:space-between;flex-wrap:wrap;padding:18px 22px}
+.ov-line{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin:0;font-size:14.5px}
+.ov-line strong{font-weight:500}
+.ov-dot{width:8px;height:8px;flex:none;border-radius:50%;background:var(--mut);transition:background .3s,box-shadow .3s}
+.ov-dot.ok{background:var(--ok);box-shadow:0 0 0 4px color-mix(in srgb,var(--ok) 15%,transparent);animation:dotPulse 2.8s ease-in-out infinite}
+@keyframes dotPulse{0%,100%{box-shadow:0 0 0 4px color-mix(in srgb,var(--ok) 15%,transparent)}50%{box-shadow:0 0 0 7px color-mix(in srgb,var(--ok) 5%,transparent)}}
+.ov-dot.bad{background:var(--bad);box-shadow:0 0 0 4px color-mix(in srgb,var(--bad) 15%,transparent)}
+.ov-sep{color:var(--mut)}
+.ov-sub{margin:4px 0 0;font-size:13px;color:var(--mut)}
+.ov-actions{display:flex;gap:8px;flex-wrap:wrap}
+.device{display:grid;grid-template-columns:168px minmax(0,1fr);gap:26px;align-items:center}
+.device-photo{width:168px;height:168px;display:grid;place-items:center;overflow:hidden;border:1px solid var(--line);border-radius:18px;background:radial-gradient(120% 120% at 50% 15%,var(--surf2),var(--bg))}
+.device-photo img{width:100%;height:100%;object-fit:contain;display:block}
+.device-photo svg{width:88px;height:88px;color:var(--line)}
+.device-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.device-head h3{font-size:21px}
+.with-i{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.h-ico{display:inline-grid;place-items:center;width:26px;height:26px;flex:none;border-radius:8px;background:var(--acc-s);color:var(--acc)}
+.h-ico .i{width:15px;height:15px}
+.device-id{margin:3px 0 0;font:12.5px var(--mono);color:var(--mut)}
+.metrics{display:flex;gap:34px;flex-wrap:wrap;margin:18px 0 0;padding:0;list-style:none}
+.metrics li{display:grid;gap:1px}
+.metrics span{font-size:12px;color:var(--mut)}
+.metrics b{font:500 18px var(--serif);font-variant-numeric:tabular-nums}
+.device-tags{display:flex;gap:6px;flex-wrap:wrap;margin-top:16px}
+.device-photo img[hidden],.qa-vol[hidden],.metrics[hidden]{display:none}
+.qa{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:14px}
+.qa-vol{display:flex;align-items:center;gap:10px;padding:5px 14px;border:1px solid var(--line);border-radius:10px;background:var(--bg)}
+.qa-vol label{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--mut);white-space:nowrap}
+.qa-vol label .i{width:15px;height:15px;color:var(--acc)}
+.qa-vol input{width:118px}
+.qa-val{min-width:36px;text-align:right;font:12.5px var(--mono);color:var(--mut)}
+input[type=range]{appearance:none;-webkit-appearance:none;height:20px;margin:0;background:transparent;cursor:pointer}
+input[type=range]::-webkit-slider-runnable-track{height:4px;border-radius:2px;background:linear-gradient(90deg,var(--acc) var(--p,0%),var(--surf2) var(--p,0%))}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;margin-top:-5px;border:2px solid var(--surf);border-radius:50%;background:var(--acc);box-shadow:0 1px 3px rgba(0,0,0,.25)}
+input[type=range]::-moz-range-track{height:4px;border-radius:2px;background:var(--surf2)}
+input[type=range]::-moz-range-progress{height:4px;border-radius:2px;background:var(--acc)}
+input[type=range]::-moz-range-thumb{width:10px;height:10px;border:2px solid var(--surf);border-radius:50%;background:var(--acc)}
+.room-name{margin:14px 0 0;font:500 17px var(--serif)}
+.room-name.empty{font:14px var(--sans);color:var(--mut)}
+.caps summary{display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:500;list-style:none}
+.caps summary::-webkit-details-marker{display:none}
+.caps summary::after{content:"раскрыть";margin-left:auto;font-size:12.5px;color:var(--mut)}
+.caps[open] summary::after{content:"свернуть"}
+.caps .chips{margin-top:14px}
+.flash{animation:flash .9s var(--ease)}
+@keyframes flash{45%{box-shadow:0 0 0 3px var(--acc-s)}}
+
 .sws{display:flex;gap:9px;flex-wrap:wrap;margin:16px 0}
 .sc{width:32px;height:32px;border-radius:50%;border:2px solid var(--surf);box-shadow:0 0 0 1px var(--line);cursor:pointer;padding:0;transition:transform .15s var(--ease),box-shadow .15s}
 .sc:hover{transform:scale(1.12)}.sc.on{box-shadow:0 0 0 2px var(--acc)}
@@ -85,7 +134,11 @@ pre.ok{color:var(--ok)}pre.bad{color:var(--bad)}
 .busy{opacity:.55;transition:opacity .2s}
 .log{list-style:none;margin:14px 0 0;padding:0;max-height:480px;overflow:auto;font:13px/1.5 var(--mono)}
 .log li{display:flex;gap:12px;padding:5px 0;border-bottom:1px solid var(--line)}
-.log time{color:var(--mut);flex:none}.log .ok span{color:var(--ok)}.log .bad span{color:var(--bad)}.log .skip span,.log .wait span{color:var(--warn)}.log .req span{color:var(--text)}
+.log time{color:var(--mut);flex:none}
+.log .lgi{display:flex;flex:none;align-items:flex-start;padding-top:2px;color:var(--mut)}
+.log .lgi .i{width:14px;height:14px;stroke-width:2}
+.log .ok .lgi{color:var(--ok)}.log .bad .lgi{color:var(--bad)}.log .skip .lgi,.log .wait .lgi{color:var(--warn)}
+.log .ok span{color:var(--ok)}.log .bad span{color:var(--bad)}.log .skip span,.log .wait span{color:var(--warn)}.log .req span{color:var(--text)}
 .log .empty{color:var(--mut);font:14px var(--sans);border:0;padding:18px 0}
 .bar{height:3px;margin-top:16px;border-radius:3px;background:var(--surf2);overflow:hidden;opacity:0;transition:opacity .2s}
 .bar.on{opacity:1}.bar::after{content:"";display:block;width:35%;height:100%;background:var(--acc);border-radius:3px;animation:slide 1.1s ease-in-out infinite}
@@ -105,7 +158,7 @@ pre.ok{color:var(--ok)}pre.bad{color:var(--bad)}
 .m{min-width:56px;padding:2px 0;border-radius:6px;text-align:center;font:600 11px/1.6 var(--mono);background:var(--surf2);color:var(--mut)}
 .m.GET{background:color-mix(in srgb,var(--ok) 16%,transparent);color:var(--ok)}.m.POST{background:var(--acc-s);color:var(--acc)}
 .m.PUT{background:color-mix(in srgb,var(--warn) 16%,transparent);color:var(--warn)}.m.DELETE{background:color-mix(in srgb,var(--bad) 16%,transparent);color:var(--bad)}
-.st{font:12px var(--mono);color:var(--mut)}.ok{color:var(--ok)}.bad{color:var(--bad)}
+.st{font:12px var(--mono);color:var(--mut)}.st .i{width:13px;height:13px;display:inline-block;vertical-align:-2px}.ok{color:var(--ok)}.bad{color:var(--bad)}
 .hid{display:none}.cat{margin:22px 0 10px;font:500 17px var(--serif)}
 .toggle-row{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:var(--bg);border:1px solid var(--line);border-radius:10px;cursor:pointer}
 .toggle-row .lbl{display:flex;align-items:center;gap:8px;font-size:13.5px}
@@ -140,7 +193,8 @@ aside{position:fixed;z-index:30;left:0;top:0;width:272px;transform:translateX(-1
 .app.open #scrim{opacity:1;pointer-events:auto}
 #menu{display:inline-flex}.top{padding:12px 16px}.top h1{font-size:22px}.wrap{padding:4px 16px 110px}
 .hero{grid-template-columns:1fr;justify-items:center;text-align:center}.hero .sws,.hero .row{justify-content:center}
-.tools{top:58px}.pill span{display:none}}
+.tools{top:58px}.pill span{display:none}
+.device{grid-template-columns:1fr;justify-items:start}.device-photo{width:132px;height:132px}.metrics{gap:22px}}
 @media(prefers-reduced-motion:reduce){*,::before,::after{animation-duration:.01ms!important;animation-delay:0s!important;transition-duration:.01ms!important;scroll-behavior:auto!important}}
 </style>
 </head>
@@ -156,17 +210,29 @@ aside{position:fixed;z-index:30;left:0;top:0;width:272px;transform:translateX(-1
 <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
 <symbol id="i-plug" viewBox="0 0 24 24"><path d="M9 3v5M15 3v5M6 8h12v3a6 6 0 0 1-12 0zM12 17v4"/></symbol>
 <symbol id="i-chev" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></symbol>
+<symbol id="i-speaker" viewBox="0 0 24 24"><rect x="6" y="2.5" width="12" height="19" rx="4"/><circle cx="12" cy="9" r="2.2"/><circle cx="12" cy="15.5" r="3.2"/></symbol>
+<symbol id="i-bulb" viewBox="0 0 24 24"><path d="M9 18h6M10 21h4"/><path d="M8.5 15.5A6 6 0 1 1 15.5 15.5c-.9.8-1 1.7-1 2.5h-5c0-.8-.1-1.7-1-2.5z"/></symbol>
+<symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 2L4 14h6l-1 8 9-12h-6z"/></symbol>
+<symbol id="i-pin" viewBox="0 0 24 24"><path d="M12 21s7-5.4 7-11a7 7 0 1 0-14 0c0 5.6 7 11 7 11z"/><circle cx="12" cy="10" r="2.5"/></symbol>
+<symbol id="i-chip" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="3"/><path d="M9 2.5v2.5M15 2.5v2.5M9 19v2.5M15 19v2.5M2.5 9H5M2.5 15H5M19 9h2.5M19 15h2.5"/></symbol>
+<symbol id="i-volume" viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16 8.5a5 5 0 0 1 0 7M18.5 6a9 9 0 0 1 0 12"/></symbol>
+<symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5l11 7-11 7z"/></symbol>
+<symbol id="i-check" viewBox="0 0 24 24"><path d="M4.5 12.5l5 5L20 6.5"/></symbol>
+<symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+<symbol id="i-minus" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
+<symbol id="i-dots" viewBox="0 0 24 24"><path d="M5 12h.01M12 12h.01M19 12h.01"/></symbol>
 </defs></svg>
 <div class="app" id="app">
 <aside>
   <div class="brand"><svg viewBox="0 0 26 26"><g fill="var(--acc)"><circle cx="13" cy="4" r="2.4"/><circle cx="21.2" cy="8.5" r="2.4" opacity=".8"/><circle cx="21.2" cy="17.5" r="2.4" opacity=".6"/><circle cx="13" cy="22" r="2.4" opacity=".45"/><circle cx="4.8" cy="17.5" r="2.4" opacity=".3"/><circle cx="4.8" cy="8.5" r="2.4" opacity=".2"/></g></svg>Luna</div>
   <a class="nv" data-v="overview" href="#overview"><svg class="i"><use href="#i-home"/></svg>Обзор</a>
-  <a class="nv" data-v="tests" href="#tests"><svg class="i"><use href="#i-pulse"/></svg>Тест API</a>
-  <a class="nv" data-v="settings" href="#settings"><svg class="i"><use href="#i-set"/></svg>Настройки</a>
-  <a class="nv" data-v="endpoints" href="#endpoints"><svg class="i"><use href="#i-code"/></svg>Endpoints</a>
   <div class="grp" id="pg" hidden>Плагины</div>
   <div id="plug"></div>
+  <div class="grp">Разработка</div>
+  <a class="nv" data-v="tests" href="#tests"><svg class="i"><use href="#i-pulse"/></svg>Тест API</a>
+  <a class="nv" data-v="endpoints" href="#endpoints"><svg class="i"><use href="#i-code"/></svg>Endpoints</a>
   <div class="sp"></div>
+  <a class="nv" data-v="settings" href="#settings"><svg class="i"><use href="#i-set"/></svg>Настройки</a>
 </aside>
 <div id="scrim"></div>
 <main>
@@ -179,10 +245,31 @@ aside{position:fixed;z-index:30;left:0;top:0;width:272px;transform:translateX(-1
   </header>
 
   <div class="wrap view on" id="v-overview">
-    <div class="card hero">
+    <div class="card ov-status">
+      <div>
+        <p class="ov-line"><span class="ov-dot" id="ov-dot"></span><strong id="ov-state">Проверяю связь…</strong><span class="ov-sep">·</span><span id="ov-device">Станция</span><span class="ov-sep" id="ov-up-sep" hidden>·</span><span id="ov-uptime" hidden></span></p>
+        <p class="ov-sub" id="ov-sub">Luna</p>
+      </div>
+      <div class="ov-actions"><button class="btn" id="ov-refresh"><svg class="i"><use href="#i-ref"/></svg>Обновить</button><a class="btn" href="#settings"><svg class="i"><use href="#i-set"/></svg>Настройки</a></div>
+    </div>
+
+    <div class="card device">
+      <div class="device-photo">
+        <img id="dev-img" alt="" hidden referrerpolicy="no-referrer">
+        <svg id="dev-fb" viewBox="0 0 96 96" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><ellipse cx="48" cy="56" rx="29" ry="11"/><path d="M19 56V45c0-6 13-11 29-11s29 5 29 11v11"/><ellipse cx="48" cy="45" rx="29" ry="11"/><ellipse cx="48" cy="45" rx="14" ry="5" opacity=".7"/></g></svg>
+      </div>
+      <div>
+        <div class="device-head"><h3 id="hname" class="with-i"><span class="h-ico"><svg class="i"><use href="#i-speaker"/></svg></span><span id="hname-text">Станция</span></h3><span class="pill" id="dev-pill">Проверяю…</span></div>
+        <p class="device-id" id="dev-id">—</p>
+        <ul class="metrics" id="dev-metrics"></ul>
+        <div class="device-tags" id="dev-tags"></div>
+      </div>
+    </div>
+
+    <div class="card hero" id="led-card">
       <svg id="ring" viewBox="0 0 250 250" role="img" aria-label="Схема LED"></svg>
       <div>
-        <h2 class="h" style="font-size:26px" id="hname">Станция</h2>
+        <h3 class="h with-i" style="font-size:20px"><span class="h-ico"><svg class="i"><use href="#i-bulb"/></svg></span>LED</h3>
         <p class="mut" id="led-desc">Цвета, которые вы отправили на LED. Выберите один или несколько.</p>
         <div class="sws" id="sws"></div>
         <div class="row" style="justify-content:flex-start">
@@ -192,13 +279,28 @@ aside{position:fixed;z-index:30;left:0;top:0;width:272px;transform:translateX(-1
         </div>
       </div>
     </div>
-    <div class="card" id="dev">
-      <div class="row"><div><h3>Устройство</h3><p class="mut">GET /api/device</p></div><button class="btn" id="dev-r">Обновить</button></div>
-      <div id="dev-b"><p class="mut" style="margin-top:14px">Загрузка…</p></div>
-    </div>
+
     <div class="card">
-      <h3>Комната</h3><p class="mut">Локальная метка станции. Пустое поле удаляет её.</p>
-      <div class="row" style="margin-top:14px;flex-wrap:nowrap"><input class="in" id="room-input" maxlength="64" placeholder="Например, Кухня"><button class="btn pri" id="room-save">Сохранить</button></div>
+      <h3 class="with-i"><span class="h-ico"><svg class="i"><use href="#i-bolt"/></svg></span>Быстрые действия</h3>
+      <div class="qa">
+        <div class="qa-vol" id="qa-vol" hidden><label for="vol-range"><svg class="i"><use href="#i-volume"/></svg>Громкость</label><input id="vol-range" type="range" min="0" max="100" value="0" aria-label="Громкость станции"><span class="qa-val" id="vol-val">—</span></div>
+        <button class="btn" id="qa-led"><svg class="i"><use href="#i-bulb"/></svg>LED</button>
+        <button class="btn" id="qa-room"><svg class="i"><use href="#i-pin"/></svg>Комната</button>
+        <a class="btn" href="#settings">Настройки</a>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="row"><div><h3 class="with-i"><span class="h-ico"><svg class="i"><use href="#i-pin"/></svg></span>Комната</h3><p class="mut">Локальная метка станции.</p></div><button class="btn" id="room-edit">Указать</button></div>
+      <p class="room-name" id="room-view">Не задана</p>
+      <div id="room-form" hidden style="margin-top:14px">
+        <div class="row" style="flex-wrap:nowrap"><input class="in" id="room-input" maxlength="64" placeholder="Например, Кухня"><button class="btn pri" id="room-save">Сохранить</button><button class="btn" id="room-cancel">Отмена</button></div>
+        <p class="mut" style="margin-top:8px">Пустое поле удаляет метку.</p>
+      </div>
+    </div>
+
+    <div class="card" id="caps-card" hidden>
+      <details class="caps" id="caps"><summary><span class="h-ico"><svg class="i"><use href="#i-chip"/></svg></span>Возможности устройства · <span id="caps-n">0</span></summary><div class="chips" id="caps-list"></div></details>
     </div>
   </div>
 
@@ -282,7 +384,12 @@ function applyTheme(t){document.documentElement.dataset.theme=t;try{const d=$('#
 function pretty(v){try{return JSON.stringify(JSON.parse(v),null,2)}catch(_){return v||'(пустой ответ)'}}
 async function fetchApi(path,options){options=options||{};options.headers=Object.assign({'X-Luna-Local':'1'},options.headers);const response=await fetch(api+path,options);const text=await response.text();return{response:response,text:text}}
 function testJson(t){try{return JSON.parse(t)}catch(_){return null}}
-function setStatus(ok){const s=$('#status');s.className='pill '+(ok?'ok':'bad');s.firstElementChild.textContent=ok?'На связи':'Нет связи'}
+function setStatus(ok){
+  const s=$('#status');s.className='pill '+(ok?'ok':'bad');s.firstElementChild.textContent=ok?'На связи':'Нет связи';
+  const dot=$('#ov-dot');if(dot)dot.className='ov-dot '+(ok?'ok':'bad');
+  const state=$('#ov-state');if(state)state.textContent=ok?'В сети':'Нет связи';
+  const pill=$('#dev-pill');if(pill){pill.className='pill '+(ok?'ok':'bad');pill.textContent=ok?'Онлайн':'Офлайн'}
+}
 
 /* ---------- навигация ---------- */
 const T={overview:'Обзор',tests:'Тест API',settings:'Настройки',endpoints:'Endpoints'};
@@ -478,9 +585,14 @@ function drawSwatches(){
    +cols.filter(c=>!COLORS.includes(c)).map(c=>'<button class="sc on" data-c="'+c+'" style="background:'+c+'" aria-label="'+c+'"></button>').join('')
    +'<label class="sc c" title="Свой цвет"><input type="color" id="cc" value="#ff3b30"></label>';
 }
+function previewLed(){
+  if(tgt!=='logo'&&ledCfg.ring_count>0)ringC=cols.slice();
+  if(tgt!=='ring'&&(ledCfg.has_logo||ledCfg.logo_count>0))logoC=cols.slice();
+  drawRing();
+}
 $('#sws').addEventListener('click',e=>{const b=e.target.closest('.sc[data-c]');if(!b)return;const c=b.dataset.c;
-  if(cols.includes(c)){if(cols.length>1)cols=cols.filter(x=>x!==c)}else cols=cols.concat(c);drawSwatches()});
-$('#sws').addEventListener('change',e=>{if(e.target.id==='cc'){const c=e.target.value.toUpperCase();if(!cols.includes(c))cols=cols.concat(c);drawSwatches()}});
+  if(cols.includes(c)){if(cols.length>1)cols=cols.filter(x=>x!==c)}else cols=cols.concat(c);drawSwatches();previewLed()});
+$('#sws').addEventListener('change',e=>{if(e.target.id==='cc'){const c=e.target.value.toUpperCase();if(!cols.includes(c))cols=cols.concat(c);drawSwatches();previewLed()}});
 $('#tgt').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;tgt=b.dataset.t;$$('#tgt button').forEach(x=>x.classList.toggle('on',x===b))});
 
 async function ledSend(off){
@@ -497,43 +609,146 @@ async function ledSend(off){
 }
 $('#led-on').onclick=()=>ledSend(false);$('#led-off').onclick=()=>ledSend(true);
 
-/* ---------- обзор: устройство и комната ---------- */
+/* ---------- обзор: состояние, фото, громкость, комната ---------- */
+const MODEL_NAMES={
+  yandexmini:'Yandex Station Mini',
+  yandexmini_2:'Yandex Station Mini 2',
+  yandexmini3:'Yandex Station Mini 3',
+  yandexmini_3_pro:'Yandex Station Mini 3 Pro',
+  yandexmicro:'Yandex Station Lite',
+  yandexmidi:'Yandex Station Midi',
+  yandexplum:'Yandex Station Plum',
+  yandexstation_2:'Yandex Station 2',
+  yandexstation_3:'Yandex Station 3',
+  yandexstation_max:'Yandex Station Max',
+  mango:'Yandex Station Mango'
+};
+const modelName=id=>MODEL_NAMES[id]||id||'Станция';
+let sensors=[],volume=null,uptimeBase=0,uptimeAt=0,roomState=null;
+
+function duration(seconds){
+  const total=Math.max(0,Math.floor(seconds)),d=Math.floor(total/86400),h=Math.floor(total%86400/3600),m=Math.floor(total%3600/60);
+  if(d)return d+'д'+(h?' '+h+'ч':'');
+  if(h)return h+'ч'+(m?' '+m+'м':'');
+  if(m)return m+'м';
+  return 'меньше минуты';
+}
+function renderUptime(){
+  const el=$('#ov-uptime'),sep=$('#ov-up-sep');
+  if(!uptimeBase){el.hidden=true;sep.hidden=true;return}
+  el.hidden=false;sep.hidden=false;
+  el.textContent='uptime '+duration(uptimeBase+(Date.now()-uptimeAt)/1000);
+}
+function renderMetrics(){
+  const rows=[];
+  if(volume!==null)rows.push(['Громкость',volume+'%']);
+  const temp=sensors.find(s=>s&&s.kind==='temperature'&&typeof s.value==='number'&&isFinite(s.value));
+  if(temp)rows.push(['Температура',Math.round(temp.value)+' °C']);
+  $('#dev-metrics').innerHTML=rows.map(([k,v])=>'<li><span>'+esc(k)+'</span><b>'+esc(v)+'</b></li>').join('');
+  $('#dev-metrics').hidden=!rows.length;
+}
+function imageBase(){
+  const endpoint=telemetryState.endpoint||'https://stats.x-servers.ru/v1/luna/events';
+  return endpoint.replace(/\/events\/?$/,'');
+}
+function setDevicePhoto(model){
+  const img=$('#dev-img'),fallback=$('#dev-fb');
+  img.hidden=true;fallback.hidden=false;img.removeAttribute('src');
+  if(!model)return;
+  img.alt='Станция '+modelName(model);
+  img.onload=()=>{img.hidden=false;fallback.hidden=true};
+  img.onerror=()=>{img.hidden=true;fallback.hidden=false};
+  img.src=imageBase()+'/models/'+encodeURIComponent(model)+'.png';
+}
 async function sendDevice(){
-  const b=$('#dev-b');$('#dev').classList.add('busy');
   try{
     const r=await fetchApi('/device');setStatus(r.response.ok);
-    if(!r.response.ok){b.innerHTML='<p class="bad" style="margin-top:14px">Ошибка '+r.response.status+'</p><pre class="bad">'+esc(pretty(r.text))+'</pre>';return}
+    if(!r.response.ok){$('#dev-id').textContent='Ошибка '+r.response.status;return}
     const j=testJson(r.text);dev=j;
-    if(!j||typeof j!=='object'){b.innerHTML='<pre>'+esc(pretty(r.text))+'</pre>';return}
-    const sc=[],nested=[];
-    Object.keys(j).forEach(k=>{const v=j[k];(v!==null&&typeof v==='object'?nested:sc).push(k)});
-    let h='<dl class="kv">'+sc.map(k=>'<dt>'+esc(k)+'</dt><dd>'+esc(j[k])+'</dd>').join('')
-      +nested.filter(k=>k!=='features').map(k=>'<dt>'+esc(k)+'</dt><dd><code>'+esc(JSON.stringify(j[k]))+'</code></dd>').join('')+'</dl>';
-    if(Array.isArray(j.features)&&j.features.length)h+='<div class="chips">'+j.features.map(f=>'<span class="chip">'+esc(f)+'</span>').join('')+'</div>';
-    h+='<details><summary>Ответ целиком</summary><pre>'+esc(JSON.stringify(j,null,2))+'</pre></details>';
-    b.innerHTML=h;
-    if(j.model)$('#hname').textContent=j.model;
+    if(!j||typeof j!=='object'){$('#dev-id').textContent='Некорректный ответ /api/device';return}
+    $('#hname-text').textContent=modelName(j.model);
+    $('#dev-id').textContent=j.model||'—';
+    $('#ov-device').textContent=modelName(j.model);
+    $('#ov-sub').textContent=['Luna',j.architecture].filter(Boolean).join(' · ');
+    if(typeof j.uptime_s==='number'){uptimeBase=j.uptime_s;uptimeAt=Date.now();renderUptime()}
+    if(j.room!==undefined){roomState=j.room||null;renderRoom()}
 
-    // Парсим параметры LED из j.led или верхнего уровня j
-    const src=j.led&&typeof j.led==='object'?j.led:j;
-    const nextCfg={
-      ring_count:src.ring_count!==undefined?Number(src.ring_count):6,
-      has_logo:src.has_logo!==undefined?Boolean(src.has_logo):true,
-      logo_count:src.logo_count!==undefined?Number(src.logo_count):1
-    };
-    if(JSON.stringify(nextCfg)!==JSON.stringify(ledCfg)){
-      buildLedCanvas(nextCfg);
-    }
-  }catch(e){setStatus(false);b.innerHTML='<p class="bad" style="margin-top:14px">'+esc(e.message)+'</p>'}
-  finally{$('#dev').classList.remove('busy')}
+    // LED-топология приходит либо вложенной в led, либо полями верхнего уровня.
+    const led=j.led&&typeof j.led==='object'?j.led:j;
+    const ring=Math.max(0,Number(led.ring_count)||0);
+    const logo=led.has_logo?Math.max(1,Number(led.logo_count)||1):0;
+    const tags=[];
+    if(j.architecture)tags.push(j.architecture);
+    if(ring)tags.push('кольцо · '+ring+' LED');
+    if(logo)tags.push('лого · '+logo+' LED');
+    $('#dev-tags').innerHTML=tags.map(t=>'<span class="chip">'+esc(t)+'</span>').join('');
+
+    const features=Array.isArray(j.features)?j.features:[];
+    $('#caps-n').textContent=features.length;
+    $('#caps-list').innerHTML=features.map(f=>'<span class="chip">'+esc(f)+'</span>').join('');
+    $('#caps-card').hidden=!features.length;
+
+    setDevicePhoto(j.model);
+    const nextCfg={ring_count:ring,has_logo:led.has_logo!==undefined?Boolean(led.has_logo):false,logo_count:logo};
+    if(JSON.stringify(nextCfg)!==JSON.stringify(ledCfg))buildLedCanvas(nextCfg);
+  }catch(e){setStatus(false);$('#dev-id').textContent=e.message}
 }
-async function loadRoom(){try{const r=await fetchApi('/room');if(r.response.ok)$('#room-input').value=(testJson(r.text)||{}).room||''}catch(_){}}
+async function loadSensors(){
+  try{const r=await fetchApi('/sensors');if(!r.response.ok)return;const list=testJson(r.text);if(!Array.isArray(list))return;sensors=list;renderMetrics()}catch(_){}
+}
+async function loadVolume(){
+  try{
+    const r=await fetchApi('/volume/get');
+    if(!r.response.ok){$('#qa-vol').hidden=true;return}
+    const j=testJson(r.text)||{};
+    if(typeof j.percent!=='number'){$('#qa-vol').hidden=true;return}
+    volume=Math.max(0,Math.min(100,Math.round(j.percent)));
+    $('#qa-vol').hidden=false;paintVolume(volume);renderMetrics();
+  }catch(_){$('#qa-vol').hidden=true}
+}
+function paintVolume(percent){
+  const range=$('#vol-range');
+  range.value=percent;
+  range.style.setProperty('--p',percent+'%');
+  $('#vol-val').textContent=percent+'%';
+}
+function renderRoom(){
+  const view=$('#room-view');
+  view.classList.toggle('empty',!roomState);
+  view.textContent=roomState||'Не задана';
+  $('#room-edit').textContent=roomState?'Изменить':'Указать';
+}
+function openRoomEditor(){
+  $('#room-form').hidden=false;$('#room-view').hidden=true;$('#room-edit').hidden=true;
+  $('#room-input').value=roomState||'';$('#room-input').focus();
+}
+function closeRoomEditor(){$('#room-form').hidden=true;$('#room-view').hidden=false;$('#room-edit').hidden=false}
+async function loadRoom(){try{const r=await fetchApi('/room');if(!r.response.ok)return;const j=testJson(r.text)||{};roomState=j.room||null;renderRoom()}catch(_){}}
 async function saveRoom(){
-  try{const r=await fetchApi('/room',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({room:$('#room-input').value})});
-    r.response.ok?toast('Комната сохранена'):toast('Ошибка '+r.response.status,'bad')}catch(e){toast(e.message,'bad')}
+  const value=$('#room-input').value.trim();
+  try{
+    const r=await fetchApi('/room',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({room:value})});
+    if(!r.response.ok){toast('Комната не сохранена: ошибка '+r.response.status,'bad');return}
+    roomState=value||null;renderRoom();closeRoomEditor();toast('Комната сохранена');
+  }catch(e){toast('Нет связи: '+e.message,'bad')}
 }
-$('#dev-r').onclick=sendDevice;$('#room-save').onclick=saveRoom;
-$('#room-input').addEventListener('keydown',e=>{if(e.key==='Enter')saveRoom()});
+$('#vol-range').addEventListener('input',e=>paintVolume(e.target.value));
+$('#vol-range').addEventListener('change',async e=>{
+  const percent=Math.round(Number(e.target.value)),previous=volume;
+  try{
+    const r=await fetchApi('/volume/set',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({percent:percent})});
+    if(!r.response.ok)throw new Error('ошибка '+r.response.status);
+    volume=percent;paintVolume(percent);renderMetrics();toast('Громкость '+percent+'%');
+  }catch(error){
+    if(previous!==null)paintVolume(previous);
+    toast('Громкость не изменилась: '+error.message,'bad');
+  }
+});
+$('#qa-led').onclick=()=>{const card=$('#led-card');card.scrollIntoView({block:'center'});card.classList.remove('flash');void card.offsetWidth;card.classList.add('flash')};
+$('#qa-room').onclick=openRoomEditor;
+$('#room-edit').onclick=openRoomEditor;$('#room-cancel').onclick=closeRoomEditor;
+$('#room-save').onclick=saveRoom;
+$('#room-input').addEventListener('keydown',e=>{if(e.key==='Enter')saveRoom();if(e.key==='Escape')closeRoomEditor()});
 
 /* ---------- настройки ---------- */
 const PERMS=[['led','LED'],['volume','Громкость'],['audio','Audio'],['microphone','Микрофон'],['bluetooth','Bluetooth'],['display','Display'],['sensors','Sensors'],['clock','Clock'],['input','Input'],['network','Network'],['ipc_read','IPC read'],['ipc_control','IPC control'],['commands','Commands'],['system','System'],['exec','Exec'],['web','Custom Web']];
@@ -613,9 +828,11 @@ function telemetryNote(){
   else el.textContent='Выключена: станция ничего не отправляет.';
 }
 function applyTelemetry(state){
+  const previousEndpoint=telemetryState.endpoint;
   telemetryState=Object.assign(telemetryState,state||{});
   $('#setting-telemetry').checked=telemetryState.enabled===true;
   telemetryNote();
+  if(dev&&dev.model&&telemetryState.endpoint!==previousEndpoint)setDevicePhoto(dev.model);
 }
 function showTelemetryDialog(){$('#tstats').hidden=false;$('#tstats-yes').focus()}
 function hideTelemetryDialog(){$('#tstats').hidden=true}
@@ -841,7 +1058,7 @@ async function sendEndpoint(ep){
     meta.innerHTML='<b class="'+(ok?'ok':'bad')+'">'+r.response.status+'</b> · '+ms+' мс';
     st.className='st '+(ok?'ok':'bad');st.textContent=r.response.status;
     if(ok&&ep.dataset.tpl)refreshPluginIds();
-  }catch(e){res.className='res bad';res.textContent=e.message;meta.textContent='ошибка сети';st.className='st bad';st.textContent='✗'}
+  }catch(e){res.className='res bad';res.textContent=e.message;meta.textContent='ошибка сети';st.className='st bad';st.innerHTML=ic('x')}
   finally{btn.disabled=false}
 }
 
@@ -870,7 +1087,9 @@ function testLog(message){
   if(apiTestLog.firstElementChild&&apiTestLog.firstElementChild.classList.contains('empty'))apiTestLog.innerHTML='';
   const k={'▶':'req','✓':'ok','✗':'bad','↷':'skip','—':'skip','…':'wait'}[message[0]]||'info';
   if(cnt[k]!==undefined){cnt[k]++;counts()}
-  const li=document.createElement('li');li.className=k;li.innerHTML='<time>'+new Date().toLocaleTimeString()+'</time><span>'+esc(message)+'</span>';
+  const marker={req:'play',ok:'check',bad:'x',skip:'minus',wait:'dots'}[k]||'dots';
+  const text=message.replace(/^[▶✓✗↷—…]\s*/,'');
+  const li=document.createElement('li');li.className=k;li.innerHTML='<time>'+new Date().toLocaleTimeString()+'</time><span class="lgi">'+ic(marker)+'</span><span>'+esc(text)+'</span>';
   apiTestLog.append(li);apiTestLog.scrollTop=apiTestLog.scrollHeight;
 }
 function testSleep(ms){return new Promise(r=>setTimeout(r,ms))}
@@ -946,13 +1165,14 @@ $('#t-copy').onclick=()=>{const t=$$('#tlog li:not(.empty)').map(l=>l.textConten
   (navigator.clipboard?navigator.clipboard.writeText(t):Promise.reject()).then(()=>toast('Лог скопирован'),()=>toast('Не удалось скопировать','bad'))};
 
 /* ---------- запуск ---------- */
-function refreshPageData(){sendDevice();loadRoom();if(isDirty())toast('Настройки не перезагружены: есть несохранённые изменения');else loadSettings();refreshCustomWebTabs();refreshPluginIds()}
-$('#refresh').onclick=refreshPageData;
+function refreshPageData(){sendDevice();loadRoom();loadVolume();loadSensors();if(isDirty())toast('Настройки не перезагружены: есть несохранённые изменения');else loadSettings();refreshCustomWebTabs();refreshPluginIds()}
+$('#refresh').onclick=refreshPageData;$('#ov-refresh').onclick=refreshPageData;
 $('#theme').onclick=()=>applyTheme(document.documentElement.dataset.theme==='dark'?'light':'dark');
 applyTheme(document.documentElement.dataset.theme);
-buildLedCanvas({ring_count:6,has_logo:true,logo_count:1});drawSwatches();buildEndpoints();route();
-sendDevice();loadRoom();loadSettings();loadTelemetry();refreshCustomWebTabs();refreshPluginIds();
+buildLedCanvas({ring_count:0,has_logo:false,logo_count:0});drawSwatches();buildEndpoints();route();
+sendDevice();loadRoom();loadVolume();loadSensors();loadSettings();loadTelemetry();refreshCustomWebTabs();refreshPluginIds();
 setInterval(()=>{refreshCustomWebTabs();refreshPluginIds()},5000);
+setInterval(renderUptime,60000);
 </script>
 </body>
 </html>

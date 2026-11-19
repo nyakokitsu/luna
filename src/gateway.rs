@@ -663,6 +663,8 @@ struct DeviceMetadata {
     #[serde(flatten)]
     profile: DeviceProfile,
     room: Option<String>,
+    /// Seconds since the runtime started, so the panel can show real uptime.
+    uptime_s: u64,
 }
 #[derive(Debug, Clone)]
 struct Sensor {
@@ -5630,6 +5632,7 @@ async fn device_metadata(a: &App) -> Result<DeviceMetadata> {
     Ok(DeviceMetadata {
         profile: a.device.lock().await.clone(),
         room: Room::load(&a.root)?.room,
+        uptime_s: a.started.elapsed().as_secs(),
     })
 }
 async fn get_device(State(a): State<App>) -> Result<Json<DeviceMetadata>, ApiError> {
