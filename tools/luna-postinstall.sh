@@ -23,6 +23,16 @@ if [ -e "$init" ] || [ -L "$init" ]; then
     echo "refusing unmanaged init script: $init" >&2
     exit 1
   }
+  # YAM updates run this hook without LUNA_LISTEN. Keep the address of the
+  # existing boot hook (e.g. an owner switched it to 127.0.0.1:8099) instead
+  # of silently reopening the API to the whole network.
+  if [ -z "${LUNA_LISTEN:-}" ]; then
+    previous=$(sed -n "s/^listen='\(.*\)'\$/\1/p" "$init" | head -n 1)
+    case "$previous" in
+      ''|*[!]A-Za-z0-9.:_[-]*) ;;
+      *) listen="$previous" ;;
+    esac
+  fi
 fi
 
 remounted=0
