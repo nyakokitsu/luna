@@ -46,6 +46,7 @@ Content-Type: application/json
 - [LED](#led)
 - [Громкость](#громкость)
 - [Собственные звуки](#собственные-звуки)
+- [Аудио по ссылке](#аудио-по-ссылке)
 - [Часы](#часы)
 - [Микрофоны](#микрофоны)
 
@@ -252,7 +253,7 @@ User Lua получает только разрешения из `lua.permission
 |---|---|
 | `led` | LED ring/logo |
 | `volume` | изменение громкости |
-| `audio` | проигрывание audio |
+| `audio` | проигрывание audio; URL требует ещё и `network` |
 | `microphone` | запись с микрофона |
 | `bluetooth` | BlueZ и Bluetooth scan/pair |
 | `display` | backlight и display API |
@@ -502,9 +503,9 @@ curl -X POST "$BASE/audio/test"
 IPC-маршрут. Endpoint предназначен для диагностики, а не для воспроизведения
 пользовательских файлов.
 
-Публичного HTTP endpoint для произвольных файлов нет: это намеренно, чтобы
-HTTP-клиент не получил доступ к файлам станции. Свои файлы запускаются из Lua
-пакета через permission `audio`:
+Публичного HTTP endpoint для чтения произвольных файлов станции нет: это
+намеренно, чтобы HTTP-клиент не получил доступ к файлам. Свои файлы
+запускаются из Lua-пакета через permission `audio`:
 
 ```toml
 permissions = ["audio"]
@@ -520,6 +521,26 @@ end
 частоту, разрядность, размер до 64 MiB и длительность до 600 секунд. MP3 и
 другие форматы пакет должен заранее преобразовать в WAV. На станциях Quasar
 воспроизведение идёт через `mediad`, без запуска собственного `aplay`.
+
+Вместо пути можно передать ссылку `http(s)://`. Тогда пакету нужны оба
+permission — `audio` и `network`, — а хост должен входить в `[network].allow`:
+
+```toml
+permissions = ["audio", "network"]
+
+[network]
+allow = ["media.example.org", "192.168.0.83"]
+allow_insecure_http = true
+```
+
+```lua
+alice.audio.play("https://media.example.org/sounds/notification.wav")
+```
+
+Luna скачивает файл с теми же ограничениями (PCM WAV, 64 MiB, 600 секунд),
+проверяет каждый redirect и проигрывает его штатным маршрутом. Потоковое
+воспроизведение без полной загрузки описано в разделе
+[Аудио по ссылке](#аудио-по-ссылке).
 
 ### Установка цветов
 
@@ -552,6 +573,75 @@ curl -X POST "$BASE/led/off/logo"
 
 На Midi после выключения Luna восстанавливает штатные triggers `ledfb-ring`
 и `ledfb-logo`, чтобы индикация Алисы снова работала.
+
+## Аудио по ссылке
+
+HTTP(S)-ссылку можно проиграть двумя способами:
+
+- `alice.audio.play(url)` из Lua-пакета скачивает файл целиком и проигрывает
+  его как обычный WAV. Нужны permission `audio` и `network`; хост должен
+  входить в `[network].allow` manifest.
+- `POST /api/audio/jobs/url` запускает потоковую задачу: звук уходит в `aplay`
+  по мере поступления, без ожидания полной загрузки.
+
+Возможности объявляются в `device.features` как `audio.play.url` и
+`audio.stream.v1`.
+
+### Настройки
+
+Потоковый endpoint использует ту же политику, что и `POST /api/http`:
+
+```toml
+[web.network]
+enabled = true
+allow = ["media.example.org", "*.example.org"]
+allow_insecure_http = false
+```
+
+Пока `enabled = false` или `allow` пуст, endpoint отвечает `403`. Каждый
+редирект проверяется по тому же списку. Для аудио, в отличие от
+`POST /api/http`, разрешены частные и локальные адреса, если администратор
+явно внёс хост в `allow`: ответ никогда не возвращается клиенту, а только
+декодируется и проигрывается. URL с логином/паролем и схемы кроме `http(s)`
+запрещены.
+
+### `POST /api/audio/jobs/url`
+
+```sh
+curl -X POST "$BASE/audio/jobs/url" \
+  -H 'Content-Type: application/json' \
+  -d '{"url":"https://media.example.org/radio.wav"}'
+```
+
+Необязательный заголовок `Idempotency-Key` (до 80 символов) делает повторный
+запрос идемпотентным. Без него каждый вызов создаёт новую задачу. Ответ `202`:
+
+```json
+{"id":"...","kind":"url","state":"queued","cleanup":"complete",
+ "sha256":"...","bytes":0,"created":1760000000,"error":null}
+```
+
+Пока играет одна задача, новый запрос получает
+`409 audio output is busy`. Готовый WAV по-прежнему можно загрузить в
+`POST /api/audio/jobs`: тело запроса — WAV, а `Idempotency-Key` обязателен.
+Обе формы создают задачу с общим жизненным циклом:
+
+| Метод | Endpoint | Действие |
+|---|---|---|
+| `GET` | `/api/audio/jobs` | список задач |
+| `GET` | `/api/audio/jobs/:id` | состояние задачи |
+| `POST` | `/api/audio/jobs/:id/cancel` | отменить воспроизведение |
+| `DELETE` | `/api/audio/jobs/:id` | удалить завершённую задачу |
+
+Формат — PCM WAV. Для файла с известной длиной действуют те же ограничения:
+до 64 MiB и 600 секунд. Поток с неизвестной длиной (`data`-чанк `0` или
+`0xFFFFFFFF`) принимается как live и ограничен 600 секундами и отменой.
+MP3, AAC, OGG и HLS не поддерживаются: пакет должен отдать WAV.
+
+Потоковый backend есть только там, где Luna играет через `aplay`
+(`LUNA_AUDIO_PCM`, например Station 2 и Mini 3 Pro). На остальных станциях
+endpoint отвечает `501`, а `alice.audio.play(url)` продолжает работать через
+`mediad`, скачав файл.
 
 ## Часы
 

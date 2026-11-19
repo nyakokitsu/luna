@@ -351,7 +351,7 @@ pub struct StationSpec {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct Settings {
+pub(crate) struct Settings {
     #[serde(default)]
     led: LedSettings,
     #[serde(default)]
@@ -363,6 +363,17 @@ struct Settings {
     #[serde(default)]
     lua: LuaSettings,
 }
+impl Settings {
+    /// Outbound policy for HTTP(S) audio sources requested over the public API.
+    pub(crate) fn stream_network(&self) -> (bool, Vec<String>, bool) {
+        (
+            self.web.network.enabled,
+            self.web.network.allow.clone(),
+            self.web.network.allow_insecure_http,
+        )
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct LuaSettings {
     #[serde(default)]
@@ -3130,6 +3141,15 @@ pub(crate) fn play_audio_file(path: &Path) -> Result<()> {
     Ok(())
 }
 
+fn schedule_audio_file_cleanup(path: PathBuf) {
+    // mediad receives the path asynchronously: keep the payload long enough
+    // for the hand-off, then remove it without blocking the Lua call.
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(300));
+        let _ = fs::remove_file(path);
+    });
+}
+
 const API_TEST_AUDIO: &[u8] = include_bytes!("../assets/audio-test.wav");
 
 fn write_api_test_audio(path: &Path) -> Result<()> {
@@ -3625,6 +3645,7 @@ async fn run_plugin(app: App, id: String, event: String, cancelled: Arc<AtomicBo
     custom_web.lock().await.remove(&id);
     let room = Room::load(&app.root)?.room;
     let lua_settings = app.settings.lock().await.lua.clone();
+    let data_root = app.root.clone();
     let enforce_user_lua_limits = id.starts_with("user_lua_");
     let lua_cancelled = cancelled.clone();
     let plugin_id = id.clone();
@@ -3894,9 +3915,38 @@ async fn run_plugin(app: App, id: String, event: String, cancelled: Arc<AtomicBo
         if permissions.contains("audio") {
             let audio = lua.create_table()?;
             let audio_root = root.clone();
+            let audio_data_root = data_root.clone();
+            let audio_network = manifest.network.clone();
+            let audio_network_enabled = permissions.contains("network");
             audio.set(
                 "play",
                 lua.create_function(move |_, file: String| {
+                    let lower = file.to_ascii_lowercase();
+                    if lower.starts_with("http://") || lower.starts_with("https://") {
+                        if !audio_network_enabled {
+                            return Err(mlua::Error::external(
+                                "audio URL playback requires the network permission",
+                            ));
+                        }
+                        let policy = crate::audio::UrlPolicy {
+                            allow: audio_network.allow.clone(),
+                            allow_insecure_http: audio_network.allow_insecure_http,
+                        };
+                        let bytes = crate::audio::fetch_url(&policy, &file)
+                            .map_err(mlua::Error::external)?;
+                        if let Some(pcm) = crate::audio::playback_pcm() {
+                            return crate::audio::play_alsa_bytes(&bytes, &pcm)
+                                .map_err(mlua::Error::external);
+                        }
+                        let path =
+                            audio_data_root.join(format!(".audio-url-{}.wav", Uuid::new_v4()));
+                        fs::write(&path, &bytes)
+                            .with_context(|| format!("write audio URL payload {}", path.display()))
+                            .map_err(mlua::Error::external)?;
+                        let played = crate::gateway::play_audio_file(&path);
+                        schedule_audio_file_cleanup(path);
+                        return played.map_err(mlua::Error::external);
+                    }
                     safe_relative(&file).map_err(mlua::Error::external)?;
                     let path = audio_root.join(file);
                     if !path.is_file() {
@@ -6706,6 +6756,12 @@ pub async fn run_with_station(station: Option<StationSpec>) -> Result<()> {
     if crate::audio::playback_pcm().is_some() && crate::audio::available() {
         device.features.push("audio.jobs.v1".into());
     }
+    if crate::audio::available() {
+        device.features.push("audio.play.url".into());
+        if crate::audio::playback_pcm().is_some() {
+            device.features.push("audio.stream.v1".into());
+        }
+    }
     if crate::owner::enabled() {
         device.features.push("owner.tools.v1".into());
         if ipc_endpoint("aliced").is_ok() {
@@ -6931,7 +6987,8 @@ pub async fn run_with_station(station: Option<StationSpec>) -> Result<()> {
     let mut router = router.with_state(app.clone());
     let mut audio_shutdown = None;
     if web.api {
-        let (audio_router, shutdown) = crate::audio_jobs::router(app.root.clone())?;
+        let (audio_router, shutdown) =
+            crate::audio_jobs::router(app.root.clone(), Some(app.settings.clone()))?;
         router = router.merge(audio_router);
         audio_shutdown = Some(shutdown);
         if crate::owner::enabled() {

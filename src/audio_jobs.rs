@@ -28,6 +28,8 @@ const TTL: u64 = 24 * 3600;
 #[derive(Clone, Serialize, Deserialize, Debug)]
 struct Outcome {
     id: String,
+    #[serde(default)]
+    kind: String,
     state: String,
     cleanup: String,
     sha256: String,
@@ -45,9 +47,20 @@ struct Job {
 struct Manager {
     root: PathBuf,
     jobs: Mutex<HashMap<String, Job>>,
+    settings: Option<Arc<tokio::sync::Mutex<crate::gateway::Settings>>>,
 }
 type Shared = Arc<Manager>;
-type Playback = dyn Fn(&std::path::Path, &AtomicBool) -> Result<(), String> + Send + Sync;
+type Playback = dyn Fn(&Source, &AtomicBool) -> Result<(), String> + Send + Sync;
+
+enum Source {
+    File(PathBuf),
+    Url(url::Url),
+}
+
+enum Pending<'a> {
+    File(&'a [u8]),
+    Url(url::Url),
+}
 
 fn now() -> u64 {
     SystemTime::now()
@@ -63,11 +76,15 @@ fn fail(status: StatusCode, text: &'static str) -> Response {
 }
 
 impl Manager {
-    fn new(root: PathBuf) -> anyhow::Result<Shared> {
+    fn new(
+        root: PathBuf,
+        settings: Option<Arc<tokio::sync::Mutex<crate::gateway::Settings>>>,
+    ) -> anyhow::Result<Shared> {
         fs::create_dir_all(&root)?;
         let manager = Arc::new(Self {
             root,
             jobs: Mutex::new(HashMap::new()),
+            settings,
         });
         for entry in fs::read_dir(&manager.root)? {
             let path = entry?.path();
@@ -136,24 +153,21 @@ impl Manager {
         }
     }
 
-    fn submit(
+    fn enqueue(
         self: &Arc<Self>,
         key: String,
-        bytes: &[u8],
+        sha256: String,
+        bytes: usize,
+        kind: &'static str,
+        pending: Pending,
         playback: Arc<Playback>,
     ) -> Result<Outcome, Response> {
-        if bytes.len() > MAX_BYTES {
-            return Err(fail(StatusCode::PAYLOAD_TOO_LARGE, "WAV exceeds 64 MiB"));
-        }
-        crate::audio::validate_wav(bytes)
-            .map_err(|_| fail(StatusCode::BAD_REQUEST, "invalid or unsupported WAV"))?;
-        let sha = format!("{:x}", Sha256::digest(bytes));
         let mut jobs = self
             .jobs
             .lock()
             .map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "job state unavailable"))?;
         if let Some(old) = jobs.values().find(|j| j.value.key == key) {
-            return if old.value.sha256 == sha {
+            return if old.value.sha256 == sha256 {
                 Ok(old.value.clone())
             } else {
                 Err(fail(
@@ -177,25 +191,38 @@ impl Manager {
             }
         }
         let id = Uuid::new_v4().to_string();
+        let (source, payload) = match pending {
+            Pending::File(bytes) => {
+                let path = self.root.join(format!("{id}.wav"));
+                fs::write(&path, bytes).map_err(|_| {
+                    fail(
+                        StatusCode::INSUFFICIENT_STORAGE,
+                        "audio storage unavailable",
+                    )
+                })?;
+                (Source::File(path.clone()), Some(path))
+            }
+            Pending::Url(url) => (Source::Url(url), None),
+        };
         let value = Outcome {
             id: id.clone(),
+            kind: kind.into(),
             state: "queued".into(),
-            cleanup: "pending".into(),
-            sha256: sha,
-            bytes: bytes.len(),
+            cleanup: if payload.is_some() {
+                "pending".into()
+            } else {
+                "complete".into()
+            },
+            sha256,
+            bytes,
             created: now(),
             error: None,
             key,
         };
-        let path = self.root.join(format!("{id}.wav"));
-        fs::write(&path, bytes).map_err(|_| {
-            fail(
-                StatusCode::INSUFFICIENT_STORAGE,
-                "audio storage unavailable",
-            )
-        })?;
         if self.persist(&value).is_err() {
-            let _ = fs::remove_file(&path);
+            if let Some(path) = &payload {
+                let _ = fs::remove_file(path);
+            }
             return Err(fail(
                 StatusCode::INSUFFICIENT_STORAGE,
                 "job persistence failed",
@@ -219,8 +246,9 @@ impl Manager {
                     let _ = manager.persist(&job.value);
                 }
             }
-            let result =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| playback(&path, &cancel)));
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                playback(&source, &cancel)
+            }));
             let mut jobs = manager.jobs.lock().unwrap();
             if let Some(job) = jobs.get_mut(&id) {
                 job.value.state = if cancel.load(Ordering::Relaxed) {
@@ -234,49 +262,175 @@ impl Manager {
                 if job.value.state == "failed" {
                     job.value.error = Some("playback backend failed".into());
                 }
-                manager.cleanup(&mut job.value);
+                if payload.is_some() {
+                    manager.cleanup(&mut job.value);
+                }
                 let _ = manager.persist(&job.value);
             }
         });
         Ok(value)
     }
+
+    fn submit(
+        self: &Arc<Self>,
+        key: String,
+        bytes: &[u8],
+        playback: Arc<Playback>,
+    ) -> Result<Outcome, Response> {
+        if bytes.len() > MAX_BYTES {
+            return Err(fail(StatusCode::PAYLOAD_TOO_LARGE, "WAV exceeds 64 MiB"));
+        }
+        crate::audio::validate_wav(bytes)
+            .map_err(|_| fail(StatusCode::BAD_REQUEST, "invalid or unsupported WAV"))?;
+        let sha = format!("{:x}", Sha256::digest(bytes));
+        self.enqueue(
+            key,
+            sha,
+            bytes.len(),
+            "upload",
+            Pending::File(bytes),
+            playback,
+        )
+    }
+
+    fn submit_url(
+        self: &Arc<Self>,
+        key: String,
+        url: url::Url,
+        playback: Arc<Playback>,
+    ) -> Result<Outcome, Response> {
+        let sha = format!("{:x}", Sha256::digest(url.as_str().as_bytes()));
+        self.enqueue(key, sha, 0, "url", Pending::Url(url), playback)
+    }
 }
 
-async fn create(State(manager): State<Shared>, headers: HeaderMap, bytes: Bytes) -> Response {
-    let Some(pcm) = crate::audio::playback_pcm() else {
-        return fail(
-            StatusCode::NOT_IMPLEMENTED,
-            "cancellable playback backend unavailable",
-        );
+fn optional_key(headers: &HeaderMap) -> Result<Option<String>, Response> {
+    let Some(value) = headers.get("idempotency-key") else {
+        return Ok(None);
     };
-    if !crate::audio::available() {
-        return fail(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "playback backend unavailable",
-        );
-    }
-    let key = headers
-        .get("idempotency-key")
-        .and_then(|h| h.to_str().ok())
-        .unwrap_or("");
+    let key = value.to_str().ok().unwrap_or("");
     if key.is_empty()
         || key.len() > 80
         || !key
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b"-_:.,".contains(&b))
     {
-        return fail(StatusCode::BAD_REQUEST, "valid Idempotency-Key required");
+        return Err(fail(
+            StatusCode::BAD_REQUEST,
+            "valid Idempotency-Key required",
+        ));
     }
-    let playback: Arc<Playback> = Arc::new(move |path, cancel| {
-        crate::audio::play_alsa_cancel(path, &pcm, cancel).map_err(|_| "playback failed".into())
+    Ok(Some(key.to_owned()))
+}
+
+fn pcm_backend() -> Result<String, Response> {
+    let Some(pcm) = crate::audio::playback_pcm() else {
+        return Err(fail(
+            StatusCode::NOT_IMPLEMENTED,
+            "cancellable playback backend unavailable",
+        ));
+    };
+    if !crate::audio::available() {
+        return Err(fail(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "playback backend unavailable",
+        ));
+    }
+    Ok(pcm)
+}
+
+async fn create(State(manager): State<Shared>, headers: HeaderMap, bytes: Bytes) -> Response {
+    let pcm = match pcm_backend() {
+        Ok(pcm) => pcm,
+        Err(response) => return response,
+    };
+    let key = match optional_key(&headers) {
+        Ok(Some(key)) => key,
+        Ok(None) => {
+            return fail(StatusCode::BAD_REQUEST, "valid Idempotency-Key required");
+        }
+        Err(response) => return response,
+    };
+    let playback: Arc<Playback> = Arc::new(move |source, cancel| match source {
+        Source::File(path) => {
+            crate::audio::play_alsa_cancel(path, &pcm, cancel).map_err(|_| "playback failed".into())
+        }
+        Source::Url(_) => Err("URL audio requires the streaming endpoint".into()),
     });
-    let key = key.to_owned();
     match tokio::task::spawn_blocking(move || manager.submit(key, &bytes, playback)).await {
         Ok(Ok(v)) => (StatusCode::ACCEPTED, Json(v)).into_response(),
         Ok(Err(r)) => r,
         Err(_) => fail(StatusCode::INTERNAL_SERVER_ERROR, "audio worker failed"),
     }
 }
+
+#[derive(Debug, Deserialize)]
+struct StreamRequest {
+    url: String,
+}
+
+async fn create_url(
+    State(manager): State<Shared>,
+    headers: HeaderMap,
+    Json(request): Json<StreamRequest>,
+) -> Response {
+    if request.url.len() > 2048 {
+        return fail(StatusCode::BAD_REQUEST, "audio URL is too long");
+    }
+    let pcm = match pcm_backend() {
+        Ok(pcm) => pcm,
+        Err(response) => return response,
+    };
+    let Some(settings) = manager.settings.clone() else {
+        return fail(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "station settings are unavailable",
+        );
+    };
+    let (enabled, allow, allow_insecure_http) = settings.lock().await.stream_network();
+    if !enabled {
+        return fail(
+            StatusCode::FORBIDDEN,
+            "outbound audio streaming is disabled; set web.network.enabled = true",
+        );
+    }
+    if allow.is_empty() {
+        return fail(
+            StatusCode::FORBIDDEN,
+            "web.network.allow must list at least one host",
+        );
+    }
+    let policy = crate::audio::UrlPolicy {
+        allow,
+        allow_insecure_http,
+    };
+    let url = match crate::audio::url_allowed(&policy, &request.url) {
+        Ok(url) => url,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": error.to_string()})),
+            )
+                .into_response()
+        }
+    };
+    let key = match optional_key(&headers) {
+        Ok(Some(key)) => key,
+        Ok(None) => format!("url:{}", Uuid::new_v4()),
+        Err(response) => return response,
+    };
+    let playback: Arc<Playback> = Arc::new(move |source, cancel| match source {
+        Source::Url(url) => crate::audio::play_url_stream(&policy, url.as_str(), &pcm, cancel)
+            .map_err(|error| error.to_string()),
+        Source::File(_) => Err("file audio requires the upload endpoint".into()),
+    });
+    match tokio::task::spawn_blocking(move || manager.submit_url(key, url, playback)).await {
+        Ok(Ok(v)) => (StatusCode::ACCEPTED, Json(v)).into_response(),
+        Ok(Err(r)) => r,
+        Err(_) => fail(StatusCode::INTERNAL_SERVER_ERROR, "audio worker failed"),
+    }
+}
+
 async fn list(State(manager): State<Shared>) -> Response {
     let values: Vec<_> = manager
         .jobs
@@ -287,6 +441,7 @@ async fn list(State(manager): State<Shared>) -> Response {
         .collect();
     Json(values).into_response()
 }
+
 async fn status(State(manager): State<Shared>, Path(id): Path<String>) -> Response {
     match manager.jobs.lock().unwrap().get(&id) {
         Some(job) => Json(job.value.clone()).into_response(),
@@ -342,11 +497,16 @@ impl Shutdown {
         }
     }
 }
-pub(crate) fn router(root: PathBuf) -> anyhow::Result<(Router, Shutdown)> {
-    let manager = Manager::new(root.join("audio-jobs"))?;
+
+pub(crate) fn router(
+    root: PathBuf,
+    settings: Option<Arc<tokio::sync::Mutex<crate::gateway::Settings>>>,
+) -> anyhow::Result<(Router, Shutdown)> {
+    let manager = Manager::new(root.join("audio-jobs"), settings)?;
     Ok((
         Router::new()
             .route("/api/audio/jobs", get(list).post(create))
+            .route("/api/audio/jobs/url", post(create_url))
             .route("/api/audio/jobs/:id", get(status).delete(remove))
             .route("/api/audio/jobs/:id/cancel", post(cancel))
             .with_state(manager.clone()),
@@ -374,6 +534,9 @@ mod tests {
         b.extend([0, 0]);
         b
     }
+    fn manager(root: PathBuf) -> Shared {
+        Manager::new(root, None).unwrap()
+    }
     async fn done(manager: &Shared, id: &str) -> Outcome {
         for _ in 0..100 {
             let v = manager.jobs.lock().unwrap()[id].value.clone();
@@ -384,10 +547,13 @@ mod tests {
         }
         panic!("job did not finish")
     }
+    fn url() -> url::Url {
+        url::Url::parse("https://media.example.org/stream.wav").unwrap()
+    }
     #[tokio::test]
     async fn success_deduplicates_and_cleans_payload() {
         let root = std::env::temp_dir().join(format!("luna-audio-test-{}", Uuid::new_v4()));
-        let m = Manager::new(root.clone()).unwrap();
+        let m = manager(root.clone());
         let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let c = calls.clone();
         let play: Arc<Playback> = Arc::new(move |_, _| {
@@ -395,6 +561,7 @@ mod tests {
             Ok(())
         });
         let job = m.submit("same".into(), &wav(), play.clone()).unwrap();
+        assert_eq!(job.kind, "upload");
         let finished = done(&m, &job.id).await;
         assert_eq!(finished.state, "succeeded");
         assert_eq!(finished.cleanup, "complete");
@@ -402,14 +569,44 @@ mod tests {
         assert_eq!(m.submit("same".into(), &wav(), play).unwrap().id, job.id);
         assert_eq!(calls.load(Ordering::Relaxed), 1);
         assert!(!serde_json::to_string(&finished).unwrap().contains("same"));
-        let reopened = Manager::new(root.clone()).unwrap();
+        let reopened = manager(root.clone());
         assert_eq!(reopened.jobs.lock().unwrap()[&job.id].value.key, "same");
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[tokio::test]
+    async fn url_jobs_do_not_write_payloads() {
+        let root = std::env::temp_dir().join(format!("luna-audio-test-{}", Uuid::new_v4()));
+        let m = manager(root.clone());
+        let seen = Arc::new(Mutex::new(None));
+        let captured = seen.clone();
+        let play: Arc<Playback> = Arc::new(move |source, _| match source {
+            Source::Url(url) => {
+                *captured.lock().unwrap() = Some(url.to_string());
+                Ok(())
+            }
+            Source::File(_) => Err("unexpected file source".into()),
+        });
+        let job = m.submit_url("stream".into(), url(), play.clone()).unwrap();
+        assert_eq!(job.kind, "url");
+        assert_eq!(job.bytes, 0);
+        assert_eq!(job.cleanup, "complete");
+        assert!(!root.join(format!("{}.wav", job.id)).exists());
+        let finished = done(&m, &job.id).await;
+        assert_eq!(finished.state, "succeeded");
+        assert_eq!(
+            seen.lock().unwrap().as_deref(),
+            Some("https://media.example.org/stream.wav")
+        );
+        assert_eq!(
+            m.submit_url("stream".into(), url(), play).unwrap().id,
+            job.id
+        );
         fs::remove_dir_all(root).unwrap();
     }
     #[tokio::test]
     async fn cancellation_and_failure_are_not_success() {
         let root = std::env::temp_dir().join(format!("luna-audio-test-{}", Uuid::new_v4()));
-        let m = Manager::new(root.clone()).unwrap();
+        let m = manager(root.clone());
         let play: Arc<Playback> = Arc::new(|_, stop| {
             while !stop.load(Ordering::Relaxed) {
                 std::thread::sleep(std::time::Duration::from_millis(2));
@@ -433,10 +630,11 @@ mod tests {
     #[test]
     fn restart_interrupts_without_replay_and_cleans_orphan() {
         let root = std::env::temp_dir().join(format!("luna-audio-test-{}", Uuid::new_v4()));
-        let m = Manager::new(root.clone()).unwrap();
+        let m = manager(root.clone());
         let id = Uuid::new_v4().to_string();
         let value = Outcome {
             id: id.clone(),
+            kind: "upload".into(),
             state: "playing".into(),
             cleanup: "pending".into(),
             sha256: "hash".into(),
@@ -448,7 +646,7 @@ mod tests {
         m.persist(&value).unwrap();
         fs::write(root.join(format!("{id}.wav")), b"orphan").unwrap();
         drop(m);
-        let reopened = Manager::new(root.clone()).unwrap();
+        let reopened = manager(root.clone());
         let jobs = reopened.jobs.lock().unwrap();
         assert_eq!(jobs[&id].value.state, "interrupted");
         assert_eq!(jobs[&id].value.cleanup, "complete");
