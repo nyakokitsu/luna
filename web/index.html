@@ -610,18 +610,18 @@ async function ledSend(off){
 $('#led-on').onclick=()=>ledSend(false);$('#led-off').onclick=()=>ledSend(true);
 
 /* ---------- обзор: состояние, фото, громкость, комната ---------- */
-const MODEL_NAMES={
-  yandexmini:'Yandex Station Mini',
-  yandexmini_2:'Yandex Station Mini 2',
-  yandexmini3:'Yandex Station Mini 3',
-  yandexmini_3_pro:'Yandex Station Mini 3 Pro',
-  yandexmicro:'Yandex Station Lite',
-  yandexmidi:'Yandex Station Midi',
-  yandexplum:'Yandex Station Plum',
-  yandexstation_2:'Yandex Station 2',
-  yandexstation_3:'Yandex Station 3',
-  yandexstation_max:'Yandex Station Max',
-  mango:'Yandex Station Mango'
+const MODEL_NAMES = {
+  yandexmini: "Yandex Station Mini",
+  yandexmini_2: "Yandex Station Mini 2",
+  yandexmini3: "Yandex Station Mini 3",
+  yandexmini_3_pro: "Yandex Station Mini 3 Pro",
+  yandexmicro: "Yandex Station Lite",
+  yandexmidi: "Yandex Station Midi",
+  yandexplum: "Yandex Station Lite 2",
+  yandexstation_2: "Yandex Station 2",
+  yandexstation_3: "Yandex Station 3",
+  yandexstation_max: "Yandex Station Max",
+  mango: "Yandex Station Street",
 };
 const modelName=id=>MODEL_NAMES[id]||id||'Станция';
 let sensors=[],volume=null,uptimeBase=0,uptimeAt=0,roomState=null;
@@ -658,7 +658,7 @@ function setDevicePhoto(model){
   img.alt='Станция '+modelName(model);
   img.onload=()=>{img.hidden=false;fallback.hidden=true};
   img.onerror=()=>{img.hidden=true;fallback.hidden=false};
-  img.src=imageBase()+'/models/'+encodeURIComponent(model)+'.png';
+  img.src=imageBase()+'/models/'+encodeURIComponent(model)+'.webp';
 }
 async function sendDevice(){
   try{
