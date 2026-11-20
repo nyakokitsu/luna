@@ -1,6 +1,6 @@
 [package]
 name = "luna-yandexplum"
-version = "0.2.7"
+version = "0.2.38"
 edition = "2021"
 
 [[bin]]
