@@ -465,9 +465,11 @@ fn default_update_interval() -> u64 {
     360
 }
 impl Default for UpdateSettings {
+    // Also used when settings.toml has no [updates] table (`#[serde(default)]`
+    // on `Settings::updates`), so it must agree with `default_updates_enabled`.
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: default_updates_enabled(),
             interval_minutes: default_update_interval(),
         }
     }
@@ -6790,7 +6792,7 @@ pub async fn run_with_station(station: Option<StationSpec>) -> Result<()> {
     }
     let settings_path = args.data_dir.join("settings.toml");
     // A broken settings.toml must not silently fall back to defaults: they
-    // re-enable the web API and auto-updates.
+    // re-enable the web API.
     let mut settings: Settings = match fs::read_to_string(&settings_path) {
         Ok(raw) => {
             toml::from_str(&raw).with_context(|| format!("invalid {}", settings_path.display()))?
@@ -8085,6 +8087,20 @@ mod tests {
             allow_insecure_http: true,
         };
         assert!(network_url_allowed(&policy, "http://127.0.0.1/").is_err());
+    }
+
+    #[test]
+    fn auto_updates_are_off_by_default() {
+        assert!(!Settings::default().updates.enabled);
+        // A settings file without an [updates] table, e.g. one that only sets
+        // allow_plugin_binaries, must not turn auto-updates on.
+        let settings: Settings = toml::from_str("allow_plugin_binaries = true\n").unwrap();
+        assert!(!settings.updates.enabled);
+        assert_eq!(settings.updates.interval_minutes, 360);
+        let settings: Settings = toml::from_str("[updates]\ninterval_minutes = 60\n").unwrap();
+        assert!(!settings.updates.enabled);
+        let settings: Settings = toml::from_str("[updates]\nenabled = true\n").unwrap();
+        assert!(settings.updates.enabled);
     }
 
     #[test]
