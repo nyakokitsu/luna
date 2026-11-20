@@ -35,8 +35,15 @@ if [ -e "$init" ] || [ -L "$init" ]; then
   fi
 fi
 
+# Mount options of / ("ro", "rw" or empty when unknown). The kernel mounts it
+# read-only on the stations; leave it the way it was found.
+root_mode() {
+  awk '$2 == "/" { o = $4 } END { if (o ~ /(^|,)ro(,|$)/) print "ro"; else if (o != "") print "rw" }' \
+    /proc/mounts 2>/dev/null || true
+}
+
 remounted=0
-if mount -o remount,rw / 2>/dev/null; then remounted=1; fi
+if [ "$(root_mode)" = ro ] && mount -o remount,rw / 2>/dev/null; then remounted=1; fi
 restore_root() {
   if [ "$remounted" -eq 1 ]; then mount -o remount,ro / 2>/dev/null || true; fi
 }
@@ -60,8 +67,23 @@ data="\$var/luna/data"
 pidfile="\$var/luna/luna.pid"
 logfile="\$var/luna/luna.log"
 listen='$listen'
-mount -o remount,rw /
-ln -sf /system/vendor/quasar/libs/libasound.so.2 /lib/libasound.so.2
+libasound=/lib/libasound.so.2
+vendor_libasound=/system/vendor/quasar/libs/libasound.so.2
+
+# Link the vendor ALSA library once. / is read-only after boot: remount it only
+# when the link is missing, and put it back.
+if [ "\$(readlink "\$libasound" 2>/dev/null || true)" != "\$vendor_libasound" ]; then
+  rootfs=\$(awk '\$2 == "/" { o = \$4 } END { print o }' /proc/mounts 2>/dev/null || true)
+  case ",\$rootfs," in
+    *,ro,*)
+      if mount -o remount,rw /; then
+        ln -sf "\$vendor_libasound" "\$libasound" || echo "cannot link \$libasound" >&2
+        mount -o remount,ro / || true
+      fi
+      ;;
+    *) ln -sf "\$vendor_libasound" "\$libasound" || echo "cannot link \$libasound" >&2 ;;
+  esac
+fi
 
 case "\${1:-start}" in
 start)
