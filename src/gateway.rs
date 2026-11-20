@@ -480,6 +480,10 @@ struct WebSettings {
     api: bool,
     #[serde(default)]
     network: WebNetworkSettings,
+    /// Browser origins besides Luna's own that may call the API, e.g.
+    /// `http://192.168.1.10:8123` for a dashboard served by another host.
+    #[serde(default)]
+    allowed_origins: Vec<String>,
 }
 /// Permission for outbound HTTP(S) from the HTTP API. Off until both
 /// `enabled` and a non-empty `allow` host list are set.
@@ -501,6 +505,7 @@ impl Default for WebSettings {
             ui: true,
             api: true,
             network: WebNetworkSettings::default(),
+            allowed_origins: Vec::new(),
         }
     }
 }
@@ -6337,6 +6342,21 @@ async fn put_settings(
             "invalid host in web.network.allow: {host}"
         )));
     }
+    if s.web.allowed_origins.len() > 64 {
+        return Err(ApiError(anyhow!(
+            "web.allowed_origins lists more than 64 origins"
+        )));
+    }
+    if let Some(origin) = s
+        .web
+        .allowed_origins
+        .iter()
+        .find(|origin| !valid_allowed_origin(origin))
+    {
+        return Err(ApiError(anyhow!(
+            "invalid origin in web.allowed_origins: {origin}"
+        )));
+    }
     safe_relative(&s.lua.share_dir)?;
     if s.lua.share_dir.is_empty() || s.lua.max_runtime_seconds == 0 {
         return Err(ApiError(anyhow!(
@@ -7002,7 +7022,10 @@ pub async fn run_with_station(station: Option<StationSpec>) -> Result<()> {
     }
     let router = router
         .layer(DefaultBodyLimit::max(67 * 1024 * 1024))
-        .layer(middleware::from_fn(browser_guard))
+        .layer(middleware::from_fn_with_state(
+            app.settings.clone(),
+            browser_guard,
+        ))
         .layer(TraceLayer::new_for_http());
     let l = TcpListener::bind(&args.listen).await?;
     tracing::info!("web UI: http://{}", args.listen);
@@ -7057,10 +7080,15 @@ fn spawn_clock_poll(clock: &Arc<dyn ClockBackend>) -> task::JoinHandle<()> {
 }
 
 /// Browser-origin guard. The LAN is trusted, so there is no authentication;
-/// this only stops a foreign web page, opened on a LAN machine, from driving
-/// the API through the visitor's browser. Clients that send no `Origin`
-/// (curl, scripts, binary packages) and the built-in UI are unaffected.
-async fn browser_guard(request: Request<Body>, next: Next) -> Response {
+/// this only stops a web page that Luna did not serve, opened in a browser on
+/// the LAN, from driving the API through the visitor's browser. Clients that
+/// send no `Origin` (curl, scripts, binary packages) and the built-in UI are
+/// unaffected; other pages need an entry in `web.allowed_origins`.
+async fn browser_guard(
+    State(settings): State<Arc<Mutex<Settings>>>,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
     let headers = request.headers();
     // DNS rebinding: the page's origin is an attacker domain that now resolves
     // to the station, so the browser sends that domain as Host.
@@ -7080,7 +7108,14 @@ async fn browser_guard(request: Request<Body>, next: Next) -> Response {
     // request and to every non-GET request; "null" (sandboxed frames,
     // file://, some redirects) is rejected.
     if let Some(origin) = headers.get(header::ORIGIN) {
-        if !origin.to_str().is_ok_and(origin_allowed) {
+        let allowed = match origin.to_str() {
+            Ok(origin) => {
+                same_origin(origin, host)
+                    || origin_listed(origin, &settings.lock().await.web.allowed_origins)
+            }
+            Err(_) => false,
+        };
+        if !allowed {
             return (StatusCode::FORBIDDEN, "cross-origin request rejected").into_response();
         }
     }
@@ -7148,29 +7183,56 @@ fn local_name(host: &str) -> bool {
                 .is_some_and(|name| !name.is_empty()))
 }
 
-/// `Origin` must name a loopback/private address or a LAN-only name. `.local`
-/// is accepted so the UI keeps working when opened via mDNS;
-fn origin_allowed(value: &str) -> bool {
-    let Ok(url) = Url::parse(value) else {
+/// The page was served by this Luna: `Origin` names the same host and port
+/// as the request's `Host` (which `host_header_allowed` already limited to IP
+/// literals and LAN-only names). Pages on other LAN hosts or ports, including
+/// other services of the station, are not trusted by default.
+fn same_origin(origin: &str, host: Option<&str>) -> bool {
+    let (Ok(url), Some(host)) = (Url::parse(origin), host) else {
         return false; // includes the opaque origin "null"
     };
     if !matches!(url.scheme(), "http" | "https") {
         return false;
     }
-    match url.host() {
-        Some(url::Host::Ipv4(ip)) => private_ipv4(ip),
-        Some(url::Host::Ipv6(ip)) => match ip.to_ipv4_mapped() {
-            Some(v4) => private_ipv4(v4),
-            None => ip.is_loopback() || (ip.segments()[0] & 0xfe00) == 0xfc00,
-        },
-        Some(url::Host::Domain(name)) => local_name(name),
-        None => false,
-    }
+    let Some(name) = url.host_str() else {
+        return false;
+    };
+    let authority = match url.port() {
+        Some(port) => format!("{name}:{port}"),
+        None => name.to_string(),
+    };
+    host.trim().eq_ignore_ascii_case(&authority)
 }
 
-fn private_ipv4(ip: std::net::Ipv4Addr) -> bool {
-    // 127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
-    ip.is_loopback() || ip.is_private()
+/// `Origin` is one the owner listed in `web.allowed_origins`.
+fn origin_listed(origin: &str, allowed: &[String]) -> bool {
+    let Ok(url) = Url::parse(origin) else {
+        return false;
+    };
+    if !matches!(url.scheme(), "http" | "https") {
+        return false;
+    }
+    let origin = url.origin().ascii_serialization();
+    allowed
+        .iter()
+        .any(|entry| entry.trim_end_matches('/').eq_ignore_ascii_case(&origin))
+}
+
+/// An allowed origin is a bare `http(s)://host[:port]`, as browsers send it.
+fn valid_allowed_origin(value: &str) -> bool {
+    let Ok(url) = Url::parse(value) else {
+        return false;
+    };
+    matches!(url.scheme(), "http" | "https")
+        && url.host_str().is_some()
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.query().is_none()
+        && url.fragment().is_none()
+        && url.path() == "/"
+        && value
+            .trim_end_matches('/')
+            .eq_ignore_ascii_case(&url.origin().ascii_serialization())
 }
 
 /// Content types a browser may send cross-origin without a preflight.
@@ -7354,43 +7416,76 @@ mod tests {
     }
 
     #[test]
-    fn origin_accepts_only_loopback_private_and_local_names() {
-        for origin in [
-            "http://127.0.0.1:8099",
-            "http://localhost:8099",
-            "http://10.1.2.3",
-            "http://172.16.0.1",
-            "http://172.31.255.255",
-            "http://192.168.1.10:8099",
-            "http://[::1]:8099",
-            "http://[fd12::1]",
-            "http://[::ffff:192.168.1.2]",
-            "https://station.local",
+    fn origin_must_match_host_or_be_listed() {
+        for (origin, host) in [
+            ("http://192.168.1.5:8099", "192.168.1.5:8099"),
+            ("http://localhost:8099", "localhost:8099"),
+            ("http://[::1]:8099", "[::1]:8099"),
+            ("https://station.local", "station.local"),
+            ("http://Station.Local:8099", "station.local:8099"),
         ] {
-            assert!(origin_allowed(origin), "{origin} should be allowed");
+            assert!(same_origin(origin, Some(host)), "{origin} on {host}");
+        }
+        for (origin, host) in [
+            // Another host or port on the LAN, including the station's own other services.
+            ("http://192.168.1.50", "192.168.1.5:8099"),
+            ("http://192.168.1.5:8055", "192.168.1.5:8099"),
+            ("http://192.168.1.5", "192.168.1.5:8099"),
+            ("http://localhost:8100", "localhost:8099"),
+            ("null", "192.168.1.5:8099"),
+            ("file:///tmp/x.html", "192.168.1.5:8099"),
+            ("garbage", "192.168.1.5:8099"),
+        ] {
+            assert!(!same_origin(origin, Some(host)), "{origin} on {host}");
+        }
+        assert!(!same_origin("http://192.168.1.5:8099", None));
+
+        let listed = vec![
+            "http://192.168.1.10:8123".to_string(),
+            "https://ha.local/".into(),
+        ];
+        assert!(origin_listed("http://192.168.1.10:8123", &listed));
+        assert!(origin_listed("https://HA.local", &listed));
+        assert!(!origin_listed("http://192.168.1.10", &listed));
+        assert!(!origin_listed("http://ha.local", &listed));
+        assert!(!origin_listed("null", &listed));
+
+        for origin in [
+            "http://192.168.1.10:8123",
+            "https://ha.local",
+            "https://ha.local/",
+        ] {
+            assert!(valid_allowed_origin(origin), "{origin} should be valid");
         }
         for origin in [
-            "null",
-            "https://evil.com",
-            "http://8.8.8.8",
-            "http://172.32.0.1",
-            "http://[2001:db8::1]",
-            "http://[::ffff:8.8.8.8]",
-            "file:///tmp/x.html",
-            "http://localhost.evil.com",
-            "garbage",
+            "192.168.1.10",
+            "ftp://ha.local",
+            "https://ha.local/panel",
+            "https://user@ha.local",
+            "https://ha.local/?x=1",
+            "*",
+            "",
         ] {
-            assert!(!origin_allowed(origin), "{origin} should be rejected");
+            assert!(!valid_allowed_origin(origin), "{origin} should be invalid");
         }
     }
 
     #[tokio::test]
     async fn browser_guard_blocks_cross_site_requests_only() {
         use tower::ServiceExt;
+        let mut settings = Settings::default();
+        settings
+            .web
+            .allowed_origins
+            .push("http://192.168.1.10:8123".into());
+        let settings = Arc::new(Mutex::new(settings));
         let app = || {
             Router::new()
                 .route("/api/x", get(|| async { "ok" }).post(|| async { "ok" }))
-                .layer(middleware::from_fn(browser_guard))
+                .layer(middleware::from_fn_with_state(
+                    settings.clone(),
+                    browser_guard,
+                ))
         };
         let status =
             |request: Request<Body>| async move { app().oneshot(request).await.unwrap().status() };
@@ -7461,6 +7556,35 @@ mod tests {
             )
             .await,
             StatusCode::FORBIDDEN
+        );
+        // A page on another LAN host or on another port of the station.
+        for origin in ["http://192.168.1.50", "http://192.168.1.5:8055"] {
+            assert_eq!(
+                status(
+                    base()
+                        .method("POST")
+                        .header("origin", origin)
+                        .header("content-type", "application/json")
+                        .body(Body::empty())
+                        .unwrap()
+                )
+                .await,
+                StatusCode::FORBIDDEN,
+                "{origin}"
+            );
+        }
+        // An origin the owner listed in web.allowed_origins.
+        assert_eq!(
+            status(
+                base()
+                    .method("POST")
+                    .header("origin", "http://192.168.1.10:8123")
+                    .header("content-type", "application/json")
+                    .body(Body::empty())
+                    .unwrap()
+            )
+            .await,
+            StatusCode::OK
         );
         // Built-in UI: same-origin, with the custom header.
         assert_eq!(

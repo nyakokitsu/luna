@@ -176,7 +176,8 @@ curl -X PUT "$BASE/settings" \
     "web":{
       "ui":true,
       "api":true,
-      "network":{"enabled":false,"allow":[],"allow_insecure_http":false}
+      "network":{"enabled":false,"allow":[],"allow_insecure_http":false},
+      "allowed_origins":[]
     },
     "allow_plugin_binaries":false,
     "updates":{"enabled":false,"interval_minutes":360},
@@ -1404,10 +1405,19 @@ curl -X PUT "$BASE/telemetry" \
 
 - Для локального тестирования используйте `--listen 127.0.0.1:8100`.
 - `0.0.0.0` открывает UI и API всем узлам доступной сети.
-- Запросы из браузера с чужих сайтов отклоняются (`403`): `Host` должен быть
+- Запросы из браузера с чужих страниц отклоняются (`403`): `Host` должен быть
   IP-адресом, `localhost` или `*.local` (защита от DNS rebinding), а `Origin`,
-  если он передан, — loopback, частной сетью (`10/8`, `172.16/12`,
-  `192.168/16`, `fc00::/7`), `localhost` или `*.local`. Изменяющие запросы с
+  если он передан, — тем же хостом и портом, что и `Host`, то есть страницей,
+  которую отдала сама Luna. Страницы с других адресов сети и с других портов
+  станции допускаются, только если владелец перечислил их в
+  `web.allowed_origins`:
+
+  ```toml
+  [web]
+  allowed_origins = ["http://192.168.1.10:8123"]
+  ```
+
+  Значение — `http(s)://хост[:порт]` без пути, как браузер присылает `Origin`. Изменяющие запросы с
   типом тела `multipart/form-data`, `application/x-www-form-urlencoded` или
   `text/plain` требуют заголовок `X-Luna-Local: 1`. JSON-запросы и запросы без
   тела из curl и скриптов работают без изменений.
