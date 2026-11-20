@@ -776,7 +776,7 @@ Luna получает распознанные события от локаль�
 микрофон и не регистрирует собственные wake word или фразы: он только читает
 события, которые уже классифицировала прошивка станции.
 
-### `GET /api/alice/speech`
+### `GET /api/alice/speech`, `POST /api/alice/speech`
 
 Ожидает следующее событие распознанной речи. STT может присылать несколько
 промежуточных состояний по мере появления слов; каждое состояние возвращается
@@ -788,10 +788,12 @@ curl -i -N --max-time 65 \
 ```
 
 Чтобы после получения речи сразу отменить текущий диалог и очистить очередь
-ответов, добавьте `cancel=true`:
+ответов, добавьте `cancel=true` и вызовите endpoint методом `POST` (тот же
+путь и параметры; `GET` с `cancel=true` отклоняется, потому что меняет
+состояние станции):
 
 ```sh
-curl -i -N --max-time 65 \
+curl -i -N -X POST --max-time 65 \
   "$BASE/alice/speech?timeout_ms=60000&cancel=true"
 ```
 
@@ -818,7 +820,7 @@ Luna отменяет диалог сразу после первого расп
 `shazam`), а `request_id` — идентификатор текущего обращения. Для локальной
 команды `source` равен `command`, `phase` — `recognition`, а `request_id` пустой.
 
-### `GET /api/alice/command`
+### `GET /api/alice/command`, `POST /api/alice/command`
 
 Ожидает событие голосовой команды. В ответе сохраняется `source`:
 
@@ -831,10 +833,11 @@ curl -i -N --max-time 65 \
 ```
 
 Чтобы после получения события отправить в `aliced` отмену текущего диалога,
-добавьте `cancel=true`:
+добавьте `cancel=true` и вызовите endpoint методом `POST` (`GET` с
+`cancel=true` отклоняется):
 
 ```sh
-curl -i -N --max-time 65 \
+curl -i -N -X POST --max-time 65 \
   "$BASE/alice/command?timeout_ms=60000&cancel=true"
 ```
 
