@@ -4995,6 +4995,39 @@ async fn luna_panel_css() -> impl IntoResponse {
         PANEL_CSS,
     )
 }
+/// `GET /web/:id`: the registered page, sandboxed and with the panel bridge.
+async fn custom_web_page(state: State<App>, id: AxumPath<String>) -> Result<Response, ApiError> {
+    let Html(page) = custom_web(state, id).await?;
+    Ok(panel_page_response(&page))
+}
+fn panel_page_response(page: &str) -> Response {
+    (
+        [
+            (header::CONTENT_SECURITY_POLICY, PANEL_CSP),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
+        Html(inject_panel_bridge(page)),
+    )
+        .into_response()
+}
+/// Puts the bridge script first in `<head>` (after `<!doctype>` when there is
+/// no `<head>`), so it runs before the page's own scripts.
+fn inject_panel_bridge(page: &str) -> String {
+    let script = format!("<script>{PANEL_BRIDGE}</script>");
+    // ASCII lowercasing keeps byte offsets, so they index `page` too.
+    let lower = page.to_ascii_lowercase();
+    let after_tag = |tag: &str| {
+        let start = lower.find(tag)?;
+        let end = lower[start..].find('>')?;
+        Some(start + end + 1)
+    };
+    let at = after_tag("<head")
+        .or_else(|| after_tag("<html"))
+        .or_else(|| after_tag("<!doctype"))
+        .unwrap_or(0);
+    format!("{}{}{}", &page[..at], script, &page[at..])
+}
 async fn custom_web(
     State(a): State<App>,
     AxumPath(id): AxumPath<String>,
@@ -7152,7 +7185,7 @@ pub async fn run_with_station(station: Option<StationSpec>) -> Result<()> {
     if web.ui {
         router = router
             .route("/", get(index))
-            .route("/web/:id", get(custom_web))
+            .route("/web/:id", get(custom_web_page))
             .route("/luna-panel.css", get(luna_panel_css));
     }
     if web.api {
@@ -7289,6 +7322,13 @@ pub async fn run_with_station(station: Option<StationSpec>) -> Result<()> {
     let router = router
         .layer(DefaultBodyLimit::max(67 * 1024 * 1024))
         .layer(middleware::from_fn_with_state(
+            PanelGuard {
+                custom_web: app.custom_web.clone(),
+                plugins: app.plugins.clone(),
+            },
+            panel_guard,
+        ))
+        .layer(middleware::from_fn_with_state(
             app.settings.clone(),
             browser_guard,
         ))
@@ -7373,7 +7413,10 @@ async fn browser_guard(
     // CSRF / cross-origin fetch: browsers attach Origin to every cross-origin
     // request and to every non-GET request; "null" (sandboxed frames,
     // file://, some redirects) is rejected.
-    if let Some(origin) = headers.get(header::ORIGIN) {
+    // The shared panel stylesheet is static and public; sandboxed plugin pages
+    // load it from an opaque origin.
+    let panel_css = *request.method() == Method::GET && request.uri().path() == "/luna-panel.css";
+    if let Some(origin) = headers.get(header::ORIGIN).filter(|_| !panel_css) {
         let allowed = match origin.to_str() {
             Ok(origin) => {
                 same_origin(origin, host)
@@ -7407,6 +7450,100 @@ async fn browser_guard(
             .into_response();
     }
     next.run(request).await
+}
+
+/// Requests that the Luna UI forwards for a plugin page carry `X-Luna-Panel`
+/// with the page's package id. Plugin pages run in a sandboxed frame and cannot
+/// reach the API themselves (their `Origin` is `null`), so this header is the
+/// only way in, and it is limited to `panel_request_allowed`.
+#[derive(Clone)]
+struct PanelGuard {
+    custom_web: Arc<Mutex<HashMap<String, CustomWebPage>>>,
+    plugins: Arc<Mutex<PluginManager>>,
+}
+async fn panel_guard(
+    State(guard): State<PanelGuard>,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    let Some(value) = request.headers().get("x-luna-panel") else {
+        return next.run(request).await;
+    };
+    let Some(panel) = value.to_str().ok().map(str::to_owned) else {
+        return (StatusCode::FORBIDDEN, "invalid X-Luna-Panel").into_response();
+    };
+    if !guard.custom_web.lock().await.contains_key(&panel) {
+        return (StatusCode::FORBIDDEN, "unknown plugin page").into_response();
+    }
+    let permissions = guard
+        .plugins
+        .lock()
+        .await
+        .permissions(&panel)
+        .unwrap_or_default();
+    let (method, path) = (request.method(), request.uri().path());
+    if !panel_request_allowed(&panel, &permissions, method, path) {
+        let message = format!("plugin page {panel} may not call {method} {path}");
+        return (StatusCode::FORBIDDEN, message).into_response();
+    }
+    next.run(request).await
+}
+
+/// What a plugin page may call: reads it needs to draw itself, its own package
+/// and packages of the same YAM namespace (a bundle's panel drives the bundle's
+/// worker), outbound HTTP (still limited by `web.network`), and the endpoints
+/// that match the page package's own permissions. Installing or removing
+/// packages, settings, user Lua and owner tools stay out of reach.
+fn panel_request_allowed(panel: &str, permissions: &[String], method: &Method, path: &str) -> bool {
+    let read = matches!(*method, Method::GET | Method::HEAD);
+    if read
+        && matches!(
+            path,
+            "/api/device" | "/api/plugins" | "/api/custom-web" | "/api/media"
+        )
+    {
+        return true;
+    }
+    if *method == Method::POST && path == "/api/http" {
+        return true;
+    }
+    if let Some(rest) = path.strip_prefix("/api/plugins/") {
+        let Some((target, action)) = rest.split_once('/') else {
+            return false;
+        };
+        let namespace = |id: &str| {
+            id.split_once('.')
+                .map(|(namespace, _)| namespace.to_owned())
+        };
+        let own =
+            target == panel || namespace(panel).is_some_and(|ns| namespace(target) == Some(ns));
+        let action = match action {
+            "logs" => read,
+            "invoke" | "stop" | "service/start" | "service/enable" | "service/disable" => {
+                *method == Method::POST
+            }
+            _ => false,
+        };
+        return own && action;
+    }
+    const BY_PERMISSION: &[(&str, &str)] = &[
+        ("led", "/api/led"),
+        ("led", "/api/led-panel"),
+        ("volume", "/api/volume"),
+        ("audio", "/api/audio"),
+        ("clock", "/api/clock"),
+        ("bluetooth", "/api/bluetooth"),
+        ("sensors", "/api/sensors"),
+        ("microphone", "/api/microphone"),
+        ("input", "/api/input"),
+    ];
+    BY_PERMISSION.iter().any(|(permission, prefix)| {
+        permissions.iter().any(|p| p == permission)
+            && (path == *prefix
+                || path
+                    .strip_prefix(prefix)
+                    .is_some_and(|r| r.starts_with('/')))
+    })
 }
 
 /// `Host` must be an IP literal (any address: a rebinding page cannot make the
@@ -7587,6 +7724,12 @@ async fn stop_all_packages(app: &App) {
 }
 const UI: &str = include_str!("../web/index.html");
 const PANEL_CSS: &str = include_str!("../web/luna-panel.css");
+/// Injected into every plugin page; see `docs/WEB_PANELS.md`.
+const PANEL_BRIDGE: &str = include_str!("../web/luna-panel-bridge.js");
+/// Plugin pages get an opaque origin even when opened outside the Luna frame,
+/// so their scripts can never call the API as Luna's own origin.
+const PANEL_CSP: &str =
+    "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads";
 
 #[cfg(test)]
 mod tests {
@@ -7736,6 +7879,190 @@ mod tests {
         }
     }
 
+    #[test]
+    fn plugin_pages_reach_only_their_own_api() {
+        let get = Method::GET;
+        let post = Method::POST;
+        let none: Vec<String> = vec!["web".into()];
+        let led: Vec<String> = vec!["web".into(), "led".into()];
+        // What the AirPlay panel (permissions = ["web"]) calls today.
+        for (method, path) in [
+            (&get, "/api/device"),
+            (&get, "/api/plugins"),
+            (&post, "/api/plugins/airplay.panel-command/invoke"),
+            (&get, "/api/plugins/airplay.panel-command/logs"),
+            (&post, "/api/plugins/airplay.panel/stop"),
+            (&post, "/api/http"),
+        ] {
+            assert!(
+                panel_request_allowed("airplay.panel", &none, method, path),
+                "{method} {path}"
+            );
+        }
+        for (method, path) in [
+            (&post, "/api/plugins"),
+            (&post, "/api/plugins/registry"),
+            (&post, "/api/plugins/rescan"),
+            (&Method::DELETE, "/api/plugins/airplay.panel-command"),
+            (&post, "/api/plugins/airplay.panel-command/toggle"),
+            (&post, "/api/plugins/other.worker/invoke"),
+            (&get, "/api/plugins/other.worker/logs"),
+            (&get, "/api/plugins/airplay.panel-command/invoke"),
+            (&Method::PUT, "/api/settings"),
+            (&get, "/api/settings"),
+            (&post, "/api/lua/run"),
+            (&Method::PUT, "/api/telemetry"),
+            (&post, "/api/owner/execute"),
+            (&post, "/api/microphone/record"),
+            (&get, "/api/alice/command"),
+            (&post, "/api/led"),
+            (&get, "/api/http"),
+            (&post, "/api/device"),
+        ] {
+            assert!(
+                !panel_request_allowed("airplay.panel", &none, method, path),
+                "{method} {path}"
+            );
+        }
+        // A package without a namespace reaches only itself.
+        assert!(panel_request_allowed(
+            "mypanel",
+            &none,
+            &post,
+            "/api/plugins/mypanel/invoke"
+        ));
+        assert!(!panel_request_allowed(
+            "mypanel",
+            &none,
+            &post,
+            "/api/plugins/mypanel-worker/invoke"
+        ));
+        assert!(!panel_request_allowed(
+            "airplay.panel",
+            &none,
+            &post,
+            "/api/plugins/airplay/invoke"
+        ));
+        // Endpoints follow the page package's permissions, on path boundaries.
+        assert!(panel_request_allowed("x.page", &led, &post, "/api/led"));
+        assert!(panel_request_allowed(
+            "x.page",
+            &led,
+            &post,
+            "/api/led/ring"
+        ));
+        assert!(panel_request_allowed(
+            "x.page",
+            &led,
+            &get,
+            "/api/led-panel/status"
+        ));
+        assert!(!panel_request_allowed("x.page", &led, &post, "/api/ledger"));
+        assert!(!panel_request_allowed(
+            "x.page",
+            &led,
+            &post,
+            "/api/volume/up"
+        ));
+    }
+
+    #[test]
+    fn plugin_page_is_sandboxed_and_gets_the_bridge() {
+        let bridge = format!("<script>{PANEL_BRIDGE}</script>");
+        assert!(!PANEL_BRIDGE.to_ascii_lowercase().contains("</script"));
+        for (page, prefix) in [
+            (
+                "<!doctype html><html><HEAD><title>x</title></head>",
+                "<!doctype html><html><HEAD>",
+            ),
+            (
+                "<!doctype html><html lang=\"ru\"><body>x",
+                "<!doctype html><html lang=\"ru\">",
+            ),
+            ("<!DOCTYPE html><p>x", "<!DOCTYPE html>"),
+            ("<h1>x</h1>", ""),
+        ] {
+            let injected = inject_panel_bridge(page);
+            assert_eq!(
+                injected,
+                format!("{prefix}{bridge}{}", &page[prefix.len()..])
+            );
+        }
+        let response = panel_page_response("<h1>x</h1>");
+        let csp = response.headers()[header::CONTENT_SECURITY_POLICY]
+            .to_str()
+            .unwrap();
+        assert!(csp.starts_with("sandbox "));
+        assert!(csp.contains("allow-scripts"));
+        assert!(!csp.contains("allow-same-origin"));
+        assert!(!csp.contains("allow-top-navigation"));
+    }
+
+    #[tokio::test]
+    async fn panel_guard_limits_forwarded_requests() {
+        use tower::ServiceExt;
+        let root = std::env::temp_dir().join(format!("luna-panel-guard-{}", Uuid::new_v4()));
+        let package = root.join("plugins/mypanel");
+        fs::create_dir_all(&package).unwrap();
+        fs::write(
+            package.join("plugin.toml"),
+            "id='mypanel'\nname='Panel'\nversion='1.0.0'\nentry='main.lua'\npermissions=['web','led']\n",
+        )
+        .unwrap();
+        let plugins = Arc::new(Mutex::new(
+            PluginManager::new(root.join("plugins"), None, None).unwrap(),
+        ));
+        let custom_web = Arc::new(Mutex::new(HashMap::new()));
+        custom_web.lock().await.insert(
+            "mypanel".to_string(),
+            CustomWebPage {
+                root: package.clone(),
+                file: package.join("index.html"),
+            },
+        );
+        let guard = PanelGuard {
+            custom_web,
+            plugins,
+        };
+        let app = || {
+            Router::new()
+                .route("/api/device", get(|| async { "ok" }))
+                .route("/api/led", post(|| async { "ok" }))
+                .route("/api/settings", put(|| async { "ok" }))
+                .layer(middleware::from_fn_with_state(guard.clone(), panel_guard))
+        };
+        let status = |method: Method, uri: &str, panel: Option<&str>| {
+            let mut request = Request::builder().method(method).uri(uri);
+            if let Some(panel) = panel {
+                request = request.header("x-luna-panel", panel);
+            }
+            let request = request.body(Body::empty()).unwrap();
+            async move { app().oneshot(request).await.unwrap().status() }
+        };
+        // Requests without the header (the UI itself, curl) are not affected.
+        assert_eq!(
+            status(Method::PUT, "/api/settings", None).await,
+            StatusCode::OK
+        );
+        assert_eq!(
+            status(Method::GET, "/api/device", Some("mypanel")).await,
+            StatusCode::OK
+        );
+        assert_eq!(
+            status(Method::POST, "/api/led", Some("mypanel")).await,
+            StatusCode::OK
+        );
+        assert_eq!(
+            status(Method::PUT, "/api/settings", Some("mypanel")).await,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            status(Method::GET, "/api/device", Some("unregistered")).await,
+            StatusCode::FORBIDDEN
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[tokio::test]
     async fn browser_guard_blocks_cross_site_requests_only() {
         use tower::ServiceExt;
@@ -7748,6 +8075,7 @@ mod tests {
         let app = || {
             Router::new()
                 .route("/api/x", get(|| async { "ok" }).post(|| async { "ok" }))
+                .route("/luna-panel.css", get(|| async { "css" }))
                 .layer(middleware::from_fn_with_state(
                     settings.clone(),
                     browser_guard,
@@ -7851,6 +8179,30 @@ mod tests {
             )
             .await,
             StatusCode::OK
+        );
+        // Sandboxed plugin pages may load the shared stylesheet, nothing else.
+        assert_eq!(
+            status(
+                Request::builder()
+                    .uri("/luna-panel.css")
+                    .header("host", "192.168.1.5:8099")
+                    .header("origin", "null")
+                    .body(Body::empty())
+                    .unwrap()
+            )
+            .await,
+            StatusCode::OK
+        );
+        assert_eq!(
+            status(
+                base()
+                    .method("GET")
+                    .header("origin", "null")
+                    .body(Body::empty())
+                    .unwrap()
+            )
+            .await,
+            StatusCode::FORBIDDEN
         );
         // Built-in UI: same-origin, with the custom header.
         assert_eq!(
