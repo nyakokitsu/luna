@@ -190,6 +190,7 @@ http://192.168.1.50:8099/
 | [PACKAGE_GUIDE.md](docs/PACKAGE_GUIDE.md) | как написать пакет на Luna |
 | [PLUGINS.md](docs/PLUGINS.md) | Lua-плагины и бандлы через YAM |
 | [API.md](docs/API.md) | HTTP API, разрешения, внешние запросы |
+| [RELEASES.md](docs/RELEASES.md) | подпись релизов, ключи и запрет отката |
 | [WEB_PANELS.md](docs/WEB_PANELS.md) | требования к сторонним веб-панелям |
 | [TELEMETRY.md](docs/TELEMETRY.md) | анонимная статистика: согласие и состав отчёта |
 | [DEVICE_GUIDE.md](docs/DEVICE_GUIDE.md) | как добавить новую станцию |
@@ -207,7 +208,7 @@ http://192.168.1.50:8099/
 | `stations/<device>/` | station crate: backend и capability-функции модели |
 | `web/` | UI панели, `/luna-panel.css` и общие ресурсы |
 | `docs/` | документация |
-| `tools/` | сборка, релиз, postinstall |
+| `tools/` | сборка, подпись и релиз, postinstall |
 | `tests/` | Python-проверки установки и HTTP-контрактов |
 | `luna-manifest.json` | станции, бинари и цели сборки |
 | `yam.yaml` | описание пакета YAM |
@@ -238,6 +239,7 @@ tools/build-deploy.sh --device yandexmini3
 - Для разработки слушайте только loopback: `luna --listen 127.0.0.1:8100`. `0.0.0.0` открывает UI и API всей сети.
 - YAM-пакет по умолчанию слушает `0.0.0.0:8099`. Чтобы закрыть Luna от сети, поменяйте строку `listen=` в `/etc/init.d/S99luna` на `listen='127.0.0.1:8099'` и выполните `/etc/init.d/S99luna restart`. Обновления через YAM сохраняют этот адрес (явный `LUNA_LISTEN` при установке важнее). Веб-панель тогда открывается через SSH-туннель: `ssh -L 8099:127.0.0.1:8099 root@<IP Станции>` → `http://localhost:8099/`.
 - Внешние HTTP(S)-запросы из API и модов по умолчанию выключены и ограничены списком хостов; локальные адреса запрещены всегда.
+- Автообновление принимает только релизы с подписанным `SHA256SUMS` и версией выше установленной. Сборка без `LUNA_UPDATE_PUBLIC_KEY` не обновляется сама; см. [docs/RELEASES.md](docs/RELEASES.md).
 
 ## Участие
 

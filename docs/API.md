@@ -1427,7 +1427,10 @@ curl -X PUT "$BASE/telemetry" \
 - Плагины и runtime-пакеты получают доступ только к API, разрешённому их
   manifest permissions.
 - Автообновление Luna из GitHub по умолчанию отключено; его можно включить в
-  `settings.toml` или через `/api/settings`.
+  `settings.toml` или через `/api/settings`. Станция принимает только релизы с
+  подписанным `SHA256SUMS` и версией выше текущей; сборка без вшитого
+  `LUNA_UPDATE_PUBLIC_KEY` не обновляется автоматически. Подробности —
+  [RELEASES.md](RELEASES.md).
 
 ## Завершение пакетов
 

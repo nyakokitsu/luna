@@ -29,6 +29,7 @@
 | [DEVICE_GUIDE.md](DEVICE_GUIDE.md) | добавить новую модель с нуля |
 | [EXTENDING_STATION.md](EXTENDING_STATION.md) | доработать capability уже поддержанной станции |
 | [GENERIC-LED-CALIBRATION.md](GENERIC-LED-CALIBRATION.md) | HTTP-контракт калибровки LED и владение индикацией |
+| [RELEASES.md](RELEASES.md) | подпись релизов, ключи, запрет отката |
 
 ## Заметки и отчёты
 
