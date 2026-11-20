@@ -354,7 +354,7 @@ aside{position:fixed;z-index:30;left:0;top:0;width:272px;transform:translateX(-1
     <p class="mut hid" id="ep-empty" style="padding:24px 0">Ничего не найдено. Попробуйте другой запрос или категорию.</p>
   </div>
 
-  <div class="wrap view" id="v-plugin"><iframe id="frame" title="Веб-интерфейс плагина"></iframe></div>
+  <div class="wrap view" id="v-plugin"><iframe id="frame" title="Веб-интерфейс плагина" sandbox="allow-scripts allow-forms allow-popups allow-modals allow-downloads"></iframe></div>
 </main>
 </div>
 <div class="dlg" id="tstats" hidden role="dialog" aria-modal="true" aria-labelledby="tstats-title">
@@ -380,7 +380,7 @@ const ic=n=>'<svg class="i"><use href="#i-'+n+'"/></svg>';
 let settingsState={},dev=null,snap='',installedPluginIds=[];
 
 function toast(t,k){const e=document.createElement('div');e.className='toast '+(k||'');e.textContent=t;$('#toasts').append(e);setTimeout(()=>{e.classList.add('out');setTimeout(()=>e.remove(),260)},3200)}
-function applyTheme(t){document.documentElement.dataset.theme=t;try{const d=$('#frame').contentDocument;if(d)d.documentElement.dataset.theme=t}catch(_){}try{localStorage.setItem('luna-theme',t)}catch(_){}$('#theme').innerHTML=ic(t==='dark'?'sun':'moon');$('#theme').title=t==='dark'?'Светлая тема':'Тёмная тема'}
+function applyTheme(t){document.documentElement.dataset.theme=t;postPanelTheme();try{localStorage.setItem('luna-theme',t)}catch(_){}$('#theme').innerHTML=ic(t==='dark'?'sun':'moon');$('#theme').title=t==='dark'?'Светлая тема':'Тёмная тема'}
 function pretty(v){try{return JSON.stringify(JSON.parse(v),null,2)}catch(_){return v||'(пустой ответ)'}}
 async function fetchApi(path,options){options=options||{};options.headers=Object.assign({'X-Luna-Local':'1'},options.headers);const response=await fetch(api+path,options);const text=await response.text();return{response:response,text:text}}
 function testJson(t){try{return JSON.parse(t)}catch(_){return null}}
@@ -403,39 +403,52 @@ function route(){
   $$('.view').forEach(e=>e.classList.toggle('on',e.id==='v-'+v));
   $$('.nv[data-v]').forEach(a=>a.classList.toggle('on',a.dataset.v===(pid?'plugin/'+pid:h)));
   $('#title').textContent=pid||T[h];document.title=(pid||T[h])+' · Luna';
-  if(pid){const p=plugins.find(x=>x.id===pid);const f=$('#frame');if(p&&f.getAttribute('src')!==p.url)f.src=p.url}
+  if(pid){const p=plugins.find(x=>x.id===pid);const f=$('#frame');if(p&&f.getAttribute('src')!==p.url){framePlugin=p.id;f.src=p.url}}
   $('#app').classList.remove('open');window.scrollTo(0,0);
 }
 
-// Keep customweb registration and document isolation, but use the outer page's
-// scrollbar. Observe content rather than the iframe viewport, so it can shrink.
-let panelObserver=null,panelResizeFrame=0;
+// Plugin pages run in a sandboxed frame with an opaque origin (see
+// web/luna-panel-bridge.js). They report their content height and send their
+// /api calls here; the UI forwards those with X-Luna-Panel, and the API limits
+// them to what the page's package may use. The outer page keeps the scrollbar.
+let panelHeight=0,panelResizeFrame=0,framePlugin=null;
 function resizePanel(){
   cancelAnimationFrame(panelResizeFrame);
   panelResizeFrame=requestAnimationFrame(()=>{
     const f=$('#frame'),view=$('#v-plugin');
-    if(!f||!view.classList.contains('on'))return;
-    try{
-      const doc=f.contentDocument,root=doc&&doc.querySelector('.wrap');
-      if(!root)return;
-      const minimum=Math.max(1,window.innerHeight-$('.top').getBoundingClientRect().height);
-      const content=Math.ceil(root.getBoundingClientRect().height);
-      const height=Math.max(minimum,content);
-      if(f.style.height!==height+'px')f.style.height=height+'px';
-    }catch(_){/* Cross-origin documents retain their normal isolated frame. */}
+    if(!f||!view.classList.contains('on')||!panelHeight)return;
+    const minimum=Math.max(1,window.innerHeight-$('.top').getBoundingClientRect().height);
+    const height=Math.max(minimum,panelHeight);
+    if(f.style.height!==height+'px')f.style.height=height+'px';
   });
 }
-$('#frame').addEventListener('load',()=>{
-  if(panelObserver){panelObserver.disconnect();panelObserver=null;}
+function postToPanel(message,transfer){
+  const f=$('#frame');
+  try{if(f&&f.contentWindow)f.contentWindow.postMessage(message,'*',transfer||[])}catch(_){}
+}
+function postPanelTheme(){postToPanel({luna:'theme',theme:document.documentElement.dataset.theme})}
+async function panelFetch(m){
   try{
-    const doc=$('#frame').contentDocument,root=doc&&doc.querySelector('.wrap');
-    if(!root)return;
-    doc.documentElement.dataset.theme=document.documentElement.dataset.theme;
-    panelObserver=new ResizeObserver(resizePanel);
-    panelObserver.observe(root);
-    resizePanel();
-  }catch(_){}
+    if(!framePlugin||typeof m.path!=='string'||!/^\/api(\/|\?|$)/.test(m.path))throw Error('invalid panel request');
+    const headers={};
+    if(m.headers&&typeof m.headers==='object')for(const[k,v]of Object.entries(m.headers))if(String(k).toLowerCase()!=='x-luna-panel')headers[k]=String(v);
+    headers['X-Luna-Panel']=framePlugin;
+    const r=await fetch(m.path,{method:String(m.method||'GET'),headers,body:m.body==null?undefined:m.body,cache:'no-store',credentials:'same-origin'});
+    const body=await r.arrayBuffer(),out={};
+    r.headers.forEach((v,k)=>{out[k]=v});
+    postToPanel({luna:'fetch-result',id:m.id,status:r.status,statusText:r.statusText,headers:out,body},[body]);
+  }catch(e){postToPanel({luna:'fetch-result',id:m.id,error:String(e&&e.message||e)})}
+}
+window.addEventListener('message',e=>{
+  const f=$('#frame');
+  if(!f||!f.contentWindow||e.source!==f.contentWindow)return;
+  const m=e.data;
+  if(!m||typeof m!=='object')return;
+  if(m.luna==='fetch')panelFetch(m);
+  else if(m.luna==='size'&&Number.isFinite(m.height)){panelHeight=Math.max(0,Math.ceil(m.height));resizePanel()}
+  else if(m.luna==='ready')postPanelTheme();
 });
+$('#frame').addEventListener('load',()=>{panelHeight=0;$('#frame').style.height='';postPanelTheme()});
 window.addEventListener('resize',resizePanel);
 window.addEventListener('hashchange',resizePanel);
 
