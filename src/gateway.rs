@@ -2227,6 +2227,66 @@ fn validate_clock_segments(segments: &HashMap<String, u8>) -> Result<()> {
     }
     Ok(())
 }
+/// Addresses outbound HTTP must never reach: the station itself and the LAN.
+/// IPv4 embedded in IPv6 (`::ffff:a.b.c.d`, the NAT64 prefix `64:ff9b::/96`
+/// and the deprecated `::a.b.c.d`) is judged by the embedded IPv4 address.
+fn local_network_ip(ip: std::net::IpAddr) -> bool {
+    fn local_v4(ip: std::net::Ipv4Addr) -> bool {
+        ip.is_private()
+            || ip.is_loopback()
+            || ip.is_link_local()
+            || ip.is_broadcast()
+            || ip.is_unspecified()
+            || ip.is_multicast()
+    }
+    match ip {
+        std::net::IpAddr::V4(ip) => local_v4(ip),
+        std::net::IpAddr::V6(ip) => {
+            if let Some(v4) = ip.to_ipv4_mapped() {
+                return local_v4(v4);
+            }
+            let s = ip.segments();
+            let embedded = || {
+                std::net::Ipv4Addr::new(
+                    (s[6] >> 8) as u8,
+                    s[6] as u8,
+                    (s[7] >> 8) as u8,
+                    s[7] as u8,
+                )
+            };
+            if s[..6] == [0x64, 0xff9b, 0, 0, 0, 0] {
+                return local_v4(embedded());
+            }
+            // ::/96 holds ::, ::1 and the deprecated IPv4-compatible form.
+            s[..6] == [0; 6]
+                || ip.is_multicast()
+                || (s[0] & 0xfe00) == 0xfc00 // unique local fc00::/7
+                || (s[0] & 0xffc0) == 0xfe80 // link-local fe80::/10
+                || (s[0] & 0xffc0) == 0xfec0 // site-local fec0::/10 (deprecated)
+        }
+    }
+}
+/// Resolves `name` and refuses it when any address is local, so a public name
+/// cannot point outbound HTTP at the station or the LAN. The caller connects
+/// to exactly these addresses, which also defeats DNS rebinding between the
+/// check and the request.
+fn public_addresses(name: &str, port: u16) -> Result<Vec<SocketAddr>> {
+    use std::net::ToSocketAddrs;
+    let addresses: Vec<SocketAddr> = (name, port)
+        .to_socket_addrs()
+        .with_context(|| format!("resolve {name}"))?
+        .collect();
+    if addresses.is_empty() {
+        bail!("{name} has no addresses")
+    }
+    if addresses
+        .iter()
+        .any(|address| local_network_ip(address.ip()))
+    {
+        bail!("{name} resolves to a local-network address")
+    }
+    Ok(addresses)
+}
 fn network_url_allowed(policy: &NetworkPolicy, value: &str) -> Result<Url> {
     let url = Url::parse(value).context("invalid URL")?;
     match url.scheme() {
@@ -2242,28 +2302,23 @@ fn network_url_allowed(policy: &NetworkPolicy, value: &str) -> Result<Url> {
         .host_str()
         .context("URL host is required")?
         .to_ascii_lowercase();
-    if host == "localhost" {
-        bail!("localhost is not allowed")
-    }
-    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
-        let local = match ip {
-            std::net::IpAddr::V4(ip) => {
-                ip.is_private()
-                    || ip.is_loopback()
-                    || ip.is_link_local()
-                    || ip.is_broadcast()
-                    || ip.is_unspecified()
-                    || ip.is_multicast()
+    // Check the parsed host, not `host_str()`: for IPv6 that string keeps its
+    // brackets ("[::1]") and never parses as an address.
+    match url.host().context("URL host is required")? {
+        url::Host::Domain(name) => {
+            if name.eq_ignore_ascii_case("localhost") {
+                bail!("localhost is not allowed")
             }
-            std::net::IpAddr::V6(ip) => {
-                ip.is_loopback()
-                    || ip.is_unicast_link_local()
-                    || ip.is_unspecified()
-                    || ip.is_multicast()
+        }
+        url::Host::Ipv4(ip) => {
+            if local_network_ip(ip.into()) {
+                bail!("local-network addresses are not allowed")
             }
-        };
-        if local {
-            bail!("local-network addresses are not allowed")
+        }
+        url::Host::Ipv6(ip) => {
+            if local_network_ip(ip.into()) {
+                bail!("local-network addresses are not allowed")
+            }
         }
     }
     let allowed = policy.allow.iter().any(|entry| {
@@ -2296,11 +2351,17 @@ fn http_request_with_headers(
 ) -> Result<(u16, String)> {
     let url = network_url_allowed(policy, url)?;
     let method = reqwest::Method::from_bytes(method.as_bytes()).context("invalid HTTP method")?;
-    let client = reqwest::blocking::Client::builder()
+    let mut client = reqwest::blocking::Client::builder()
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(20))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()?;
+        .redirect(reqwest::redirect::Policy::none());
+    if let Some(url::Host::Domain(name)) = url.host() {
+        let port = url
+            .port_or_known_default()
+            .context("URL port is required")?;
+        client = client.resolve_to_addrs(name, &public_addresses(name, port)?);
+    }
+    let client = client.build()?;
     let mut request = client.request(method, url).body(body.unwrap_or_default());
     for (name, value) in headers {
         request = request.header(name.as_str(), value.as_str());
@@ -8101,6 +8162,52 @@ mod tests {
         assert!(!settings.updates.enabled);
         let settings: Settings = toml::from_str("[updates]\nenabled = true\n").unwrap();
         assert!(settings.updates.enabled);
+    }
+
+    #[test]
+    fn network_policy_blocks_local_ipv6_literals() {
+        let policy = NetworkPolicy {
+            allow: vec!["*".into()],
+            allow_insecure_http: true,
+        };
+        for url in [
+            "http://[::1]/",
+            "http://[::]/",
+            "http://[::ffff:127.0.0.1]/",
+            "http://[::ffff:7f00:1]/",
+            "http://[::ffff:192.168.1.1]/",
+            "http://[::127.0.0.1]/",
+            "http://[64:ff9b::7f00:1]/",
+            "http://[64:ff9b::c0a8:101]/",
+            "http://[fd00::1]/",
+            "http://[fc00::1]/",
+            "http://[fe80::1]/",
+            "http://[fec0::1]/",
+            "http://[ff02::1]/",
+            "http://LOCALHOST/",
+        ] {
+            assert!(network_url_allowed(&policy, url).is_err(), "{url}");
+        }
+        for url in [
+            "https://[2001:4860:4860::8888]/",
+            "https://[::ffff:8.8.8.8]/",
+            "https://[64:ff9b::808:808]/",
+            "https://8.8.8.8/",
+            "https://example.org/",
+        ] {
+            assert!(network_url_allowed(&policy, url).is_ok(), "{url}");
+        }
+    }
+
+    #[test]
+    fn outbound_names_must_resolve_to_public_addresses() {
+        // Numeric hosts resolve without DNS, so this runs offline.
+        assert!(public_addresses("127.0.0.1", 80).is_err());
+        assert!(public_addresses("192.168.1.1", 80).is_err());
+        assert!(public_addresses("::ffff:10.0.0.1", 80).is_err());
+        assert!(public_addresses("localhost", 80).is_err());
+        let public = public_addresses("8.8.8.8", 443).unwrap();
+        assert_eq!(public, vec!["8.8.8.8:443".parse::<SocketAddr>().unwrap()]);
     }
 
     #[test]
