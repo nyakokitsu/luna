@@ -805,7 +805,25 @@ fn alice_poll_response(
     }
 }
 
+/// `cancel=true` changes the station's state, so it is accepted only on POST:
+/// a page can make a browser send a simple GET to the station (an image or a
+/// link) without any Origin header for `browser_guard` to check.
+fn reject_get_cancel(query: &AliceCommandQuery, path: &str) -> Result<(), ApiError> {
+    if query.cancel {
+        return Err(ApiError(anyhow!(
+            "cancel=true is accepted only with POST {path}"
+        )));
+    }
+    Ok(())
+}
 async fn get_alice_command(Query(query): Query<AliceCommandQuery>) -> Result<Response, ApiError> {
+    reject_get_cancel(&query, "/api/alice/command")?;
+    alice_command(query).await
+}
+async fn post_alice_command(Query(query): Query<AliceCommandQuery>) -> Result<Response, ApiError> {
+    alice_command(query).await
+}
+async fn alice_command(query: AliceCommandQuery) -> Result<Response, ApiError> {
     let timeout_ms = query.timeout_ms.unwrap_or(60_000).min(60_000);
     let event = task::spawn_blocking(move || wait_alice_speech(timeout_ms, true))
         .await
@@ -821,6 +839,13 @@ async fn get_alice_command(Query(query): Query<AliceCommandQuery>) -> Result<Res
 }
 
 async fn get_alice_speech(Query(query): Query<AliceCommandQuery>) -> Result<Response, ApiError> {
+    reject_get_cancel(&query, "/api/alice/speech")?;
+    alice_speech(query).await
+}
+async fn post_alice_speech(Query(query): Query<AliceCommandQuery>) -> Result<Response, ApiError> {
+    alice_speech(query).await
+}
+async fn alice_speech(query: AliceCommandQuery) -> Result<Response, ApiError> {
     let timeout_ms = query.timeout_ms.unwrap_or(60_000).min(60_000);
     let cancel = query.cancel;
     // Expose interim STT updates normally. In cancel mode the purpose is to
@@ -7202,8 +7227,14 @@ pub async fn run_with_station(station: Option<StationSpec>) -> Result<()> {
             .route("/api/audio/test", post(audio_test))
             .route("/api/microphone/devices", get(get_microphone_devices))
             .route("/api/microphone/record", post(record_microphone))
-            .route("/api/alice/command", get(get_alice_command))
-            .route("/api/alice/speech", get(get_alice_speech))
+            .route(
+                "/api/alice/command",
+                get(get_alice_command).post(post_alice_command),
+            )
+            .route(
+                "/api/alice/speech",
+                get(get_alice_speech).post(post_alice_speech),
+            )
             .route("/api/alice/recognize", post(recognize_alice_speech))
             .route("/api/alice/speech/cancel", post(cancel_alice_speech))
             .route("/api/input/devices", get(get_input_devices))
@@ -8050,6 +8081,42 @@ mod tests {
             .await
             .into_response();
         assert_eq!(recognition.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn alice_cancel_requires_post() {
+        let _aliced = FakeAliced::start();
+        let query = |text: &str| {
+            Query::<AliceCommandQuery>::try_from_uri(&format!("/?{text}").parse().unwrap()).unwrap()
+        };
+        // Rejected before waiting for aliced, so no cancel can be sent.
+        for response in [
+            get_alice_command(query("timeout_ms=50&cancel=true"))
+                .await
+                .into_response(),
+            get_alice_speech(query("timeout_ms=50&cancel=true"))
+                .await
+                .into_response(),
+        ] {
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            assert!(String::from_utf8_lossy(&body).contains("only with POST"));
+        }
+        let command = post_alice_command(query("timeout_ms=50&cancel=true&empty_on_timeout=true"))
+            .await
+            .into_response();
+        assert_eq!(command.status(), StatusCode::NO_CONTENT);
+        let speech = post_alice_speech(query("timeout_ms=50&cancel=true&empty_on_timeout=true"))
+            .await
+            .into_response();
+        assert_eq!(speech.status(), StatusCode::NO_CONTENT);
+        // Plain polling keeps working on GET.
+        let poll = get_alice_command(query("timeout_ms=50&empty_on_timeout=true"))
+            .await
+            .into_response();
+        assert_eq!(poll.status(), StatusCode::NO_CONTENT);
     }
 
     #[tokio::test]
