@@ -114,6 +114,18 @@ input[type=range]::-moz-range-thumb{width:10px;height:10px;border:2px solid var(
 .flash{animation:flash .9s var(--ease)}
 @keyframes flash{45%{box-shadow:0 0 0 3px var(--acc-s)}}
 
+/* Mesh: главная и ведомая станции */
+.mesh-banner{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0 28px 6px;padding:12px 16px;border:1px solid color-mix(in srgb,var(--acc) 35%,var(--line));border-radius:14px;background:var(--acc-s);font-size:14px}
+.mesh-banner .i{color:var(--acc)}
+.mesh-banner span{flex:1;min-width:180px}
+.mesh-peers{display:grid;gap:8px;margin-top:14px}
+.mesh-peer{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg)}
+.mesh-peer-body{flex:1;min-width:170px}
+.mesh-peer-id{font:12.5px var(--mono);color:var(--text)}
+.mesh-peer-meta{font-size:12px;color:var(--mut)}
+.mesh-peer .btn{min-height:30px;padding:4px 10px;font-size:13px}
+#mesh-banner[hidden],#mesh-peers:empty{display:none}
+
 .sws{display:flex;gap:9px;flex-wrap:wrap;margin:16px 0}
 .sc{width:32px;height:32px;border-radius:50%;border:2px solid var(--surf);box-shadow:0 0 0 1px var(--line);cursor:pointer;padding:0;transition:transform .15s var(--ease),box-shadow .15s}
 .sc:hover{transform:scale(1.12)}.sc.on{box-shadow:0 0 0 2px var(--acc)}
@@ -243,6 +255,11 @@ aside{position:fixed;z-index:30;left:0;top:0;width:272px;transform:translateX(-1
     <button class="btn sq" id="refresh" title="Обновить всё" aria-label="Обновить всё"><svg class="i"><use href="#i-ref"/></svg></button>
     <button class="btn sq" id="theme" aria-label="Переключить тему"></button>
   </header>
+  <div class="mesh-banner" id="mesh-banner" hidden role="status">
+    <svg class="i"><use href="#i-bolt"/></svg>
+    <span id="mesh-banner-text"></span>
+    <a class="btn" id="mesh-banner-link" target="_blank" rel="noreferrer">Открыть главную панель</a>
+  </div>
 
   <div class="wrap view on" id="v-overview">
     <div class="card ov-status">
@@ -337,6 +354,16 @@ aside{position:fixed;z-index:30;left:0;top:0;width:272px;transform:translateX(-1
       <label class="sw"><span>Разрешить HTTP-запросы из API</span><input id="setting-web-net" type="checkbox"></label>
       <label class="sw"><span>Разрешить незащищённый http://</span><input id="setting-web-net-http" type="checkbox"></label>
       <div class="g2"><label class="fld">Разрешённые хосты<input class="in" id="setting-web-net-allow" placeholder="api.example.org, *.example.org"></label></div></div>
+    <div class="card"><h3>Сеть станций</h3>
+      <p class="mut">station_id — первые 7 символов mv_uuid из /bkupgrade/new_nvram_config. Регистрация необязательна: mesh работает и без неё.</p>
+      <dl class="kv"><dt>station_id</dt><dd id="id-station">—</dd><dt>public key</dt><dd id="id-key">—</dd><dt>источник</dt><dd id="id-source">—</dd></dl>
+      <p class="mut" id="reg-note" style="margin-top:10px">Проверяю регистрацию…</p>
+      <div class="row" style="margin-top:12px;justify-content:flex-start"><button class="btn pri" id="reg-btn">Зарегистрировать</button><button class="btn" id="backup-btn" hidden>Сохранить конфигурацию</button></div>
+      <label class="sw" style="margin-top:16px"><span>Mesh: обнаруживать станции в локальной сети</span><input id="setting-mesh" type="checkbox"></label>
+      <div class="g2"><label class="fld">Имя сети<input class="in" id="setting-mesh-name" maxlength="32" placeholder="luna"></label></div>
+      <div class="row" style="margin-top:12px;justify-content:flex-start"><button class="btn" id="mesh-save">Сохранить mesh</button><button class="btn" id="mesh-main-self" hidden>Сделать эту станцию главной</button></div>
+      <div class="mesh-peers" id="mesh-peers"></div>
+    </div>
     <div class="card"><h3>Анонимная статистика</h3>
       <p class="mut">Необязательный отчёт о станции и Luna: модель, возможности, установленные модули, настройки, ошибки и нагрузка. Без имени сети, серийного номера, IP и текста комнаты.</p>
       <label class="sw"><span>Отправлять анонимную статистику</span><input id="setting-telemetry" type="checkbox"></label>
@@ -369,6 +396,13 @@ aside{position:fixed;z-index:30;left:0;top:0;width:272px;transform:translateX(-1
     </ul>
     <p class="mut" style="margin-top:14px">Не отправляются: IP и имя сети, серийный номер, имя хоста, текст метки комнаты, содержимое модулей, файлы и список приватных хостов. Решение можно изменить в настройках.</p>
     <div class="dlg-actions"><button class="btn" id="tstats-no">Не отправлять</button><button class="btn pri" id="tstats-yes">Отправлять</button></div>
+  </div>
+</div>
+<div class="dlg" id="regsave" hidden role="dialog" aria-modal="true" aria-labelledby="regsave-title">
+  <div class="dlg-box">
+    <h2 id="regsave-title">Сохранить конфигурацию?</h2>
+    <p class="mut">Станция зарегистрирована на stats.x-servers.ru как <span id="regsave-id">—</span>. Отправить туда резервную копию settings.toml, device.toml и room.toml? Ключи и identity.toml не отправляются.</p>
+    <div class="dlg-actions"><button class="btn" id="regsave-no">Не сохранять</button><button class="btn pri" id="regsave-yes">Сохранить на сервере</button></div>
   </div>
 </div>
 <div id="toasts" aria-live="polite"></div>
@@ -857,6 +891,85 @@ $('#setting-telemetry').addEventListener('change',e=>saveTelemetry(e.target.chec
 $('#tstats-yes').onclick=()=>saveTelemetry(true);
 $('#tstats-no').onclick=()=>saveTelemetry(false);
 
+/* ---------- станция: регистрация, бэкап и mesh ---------- */
+let identityState=null,meshState=null;
+const idSources={nvram:'mv_uuid из /bkupgrade/new_nvram_config',env:'LUNA_STATION_ID',generated:'локальный резерв'};
+function renderIdentity(){
+  const s=identityState||{};
+  $('#id-station').textContent=s.station_id||'—';
+  $('#id-key').textContent=s.public_key?s.public_key.slice(0,20)+'…':'—';
+  $('#id-source').textContent=idSources[s.source]||s.source||'—';
+  $('#reg-btn').disabled=s.registered===true;
+  $('#backup-btn').hidden=s.registered!==true;
+  const note=$('#reg-note');
+  if(s.registered)note.textContent='Зарегистрирована на '+(s.endpoint||'stats.x-servers.ru')+(s.backup_at?' · конфигурация сохранена':' · конфигурация ещё не сохранена');
+  else note.textContent='Не зарегистрирована. Mesh работает и без регистрации, на сервер ничего не уходит.';
+}
+async function loadIdentity(){try{const r=await fetchApi('/identity');if(!r.response.ok)return;identityState=testJson(r.text)||{};renderIdentity()}catch(_){}}
+async function registerStation(){
+  const b=$('#reg-btn');b.disabled=true;
+  try{const r=await fetchApi('/register',{method:'POST',headers:{'content-type':'application/json'},body:'{}'});
+    if(!r.response.ok){toast('Регистрация: '+r.response.status+' '+pretty(r.text).slice(0,140),'bad');b.disabled=false;return}
+    identityState=testJson(r.text)||{};renderIdentity();showRegSaveDialog();
+  }catch(e){toast('Нет связи: '+e.message,'bad');b.disabled=false}
+}
+async function backupConfig(){
+  const b=$('#backup-btn');b.disabled=true;
+  try{const r=await fetchApi('/backup',{method:'POST',headers:{'content-type':'application/json'},body:'{}'});
+    if(!r.response.ok){toast('Бэкап: '+r.response.status+' '+pretty(r.text).slice(0,140),'bad');return}
+    const j=testJson(r.text)||{};toast('Конфигурация сохранена на сервере · '+(j.bytes||0)+' Б');hideRegSaveDialog();await loadIdentity();
+  }catch(e){toast('Нет связи: '+e.message,'bad')}finally{b.disabled=false}
+}
+function showRegSaveDialog(){const id=$('#regsave-id');if(id)id.textContent=(identityState&&identityState.station_id)||'—';$('#regsave').hidden=false;$('#regsave-yes').focus()}
+function hideRegSaveDialog(){$('#regsave').hidden=true}
+function renderMesh(){
+  const m=meshState||{},peers=Array.isArray(m.peers)?m.peers:[];
+  $('#setting-mesh').checked=m.enabled===true;
+  $('#setting-mesh-name').value=m.name||'luna';
+  const main=m.main||null;
+  $('#mesh-banner').hidden=!main;
+  if(main){
+    $('#mesh-banner-text').textContent='Эта станция управляется через станцию '+main+(m.main_url?'':' (главная панель сейчас не в сети)');
+    const link=$('#mesh-banner-link');link.hidden=!m.main_url;if(m.main_url)link.href=m.main_url;
+  }
+  $('#mesh-main-self').hidden=!main;
+  const list=$('#mesh-peers');list.innerHTML='';
+  const self=document.createElement('div');self.className='mesh-peer';
+  self.innerHTML='<div class="mesh-peer-body"><div class="mesh-peer-id">'+esc(m.station_id||'—')+' · эта станция</div><div class="mesh-peer-meta">'+(main?'ведомая, главная: '+esc(main):'главная панель mesh')+'</div></div>';
+  list.append(self);
+  for(const p of peers){
+    const row=document.createElement('div');row.className='mesh-peer';
+    const url='http://'+p.ip+':'+p.port;
+    row.innerHTML='<div class="mesh-peer-body"><div class="mesh-peer-id">'+esc(p.station_id)+'</div><div class="mesh-peer-meta">'+esc(p.model||'')+' · '+esc(p.ip)+':'+esc(String(p.port))+' · '+(p.main?'ведомая':'главная')+'</div></div>'
+      +'<a class="btn" href="'+esc(url)+'" target="_blank" rel="noreferrer">Открыть</a>'
+      +(main===p.station_id?'':'<button class="btn" data-main="'+esc(p.station_id)+'">Управлять отсюда</button>');
+    list.append(row);
+  }
+  if(!peers.length){const empty=document.createElement('p');empty.className='mut';empty.textContent='Другие станции пока не найдены. Включите mesh на обеих станциях в одной сети.';list.append(empty)}
+}
+async function loadMesh(){try{const r=await fetchApi('/mesh');if(!r.response.ok)return;meshState=testJson(r.text)||{};renderMesh()}catch(_){}}
+async function saveMesh(){
+  const b=$('#mesh-save');b.disabled=true;
+  try{const r=await fetchApi('/mesh',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({enabled:$('#setting-mesh').checked,name:$('#setting-mesh-name').value})});
+    if(!r.response.ok){toast('Mesh: '+r.response.status+' '+pretty(r.text).slice(0,140),'bad');return}
+    meshState=testJson(r.text)||{};renderMesh();toast('Mesh сохранён');
+  }catch(e){toast('Нет связи: '+e.message,'bad')}finally{b.disabled=false}
+}
+async function setMeshMain(stationId){
+  try{const r=await fetchApi('/mesh/main',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({station_id:stationId})});
+    if(!r.response.ok){toast('Mesh: '+r.response.status+' '+pretty(r.text).slice(0,140),'bad');return}
+    meshState=testJson(r.text)||{};renderMesh();toast('Главная станция обновлена');
+  }catch(e){toast('Нет связи: '+e.message,'bad')}
+}
+$('#reg-btn').onclick=registerStation;
+$('#backup-btn').onclick=backupConfig;
+$('#regsave-yes').onclick=backupConfig;
+$('#regsave-no').onclick=hideRegSaveDialog;
+$('#mesh-save').onclick=saveMesh;
+$('#mesh-main-self').onclick=()=>setMeshMain(null);
+$('#mesh-peers').addEventListener('click',e=>{const b=e.target.closest('[data-main]');if(b)setMeshMain(b.dataset.main)});
+setInterval(loadMesh,10000);
+
 /* ---------- endpoints ---------- */
 const EP=`# Device и sensors
 GET /room
@@ -1165,12 +1278,12 @@ $('#t-copy').onclick=()=>{const t=$$('#tlog li:not(.empty)').map(l=>l.textConten
   (navigator.clipboard?navigator.clipboard.writeText(t):Promise.reject()).then(()=>toast('Лог скопирован'),()=>toast('Не удалось скопировать','bad'))};
 
 /* ---------- запуск ---------- */
-function refreshPageData(){sendDevice();loadRoom();loadVolume();loadSensors();if(isDirty())toast('Настройки не перезагружены: есть несохранённые изменения');else loadSettings();refreshCustomWebTabs();refreshPluginIds()}
+function refreshPageData(){sendDevice();loadRoom();loadVolume();loadSensors();loadIdentity();loadMesh();if(isDirty())toast('Настройки не перезагружены: есть несохранённые изменения');else loadSettings();refreshCustomWebTabs();refreshPluginIds()}
 $('#refresh').onclick=refreshPageData;$('#ov-refresh').onclick=refreshPageData;
 $('#theme').onclick=()=>applyTheme(document.documentElement.dataset.theme==='dark'?'light':'dark');
 applyTheme(document.documentElement.dataset.theme);
 buildLedCanvas({ring_count:0,has_logo:false,logo_count:0});drawSwatches();buildEndpoints();route();
-sendDevice();loadRoom();loadVolume();loadSensors();loadSettings();loadTelemetry();refreshCustomWebTabs();refreshPluginIds();
+sendDevice();loadRoom();loadVolume();loadSensors();loadSettings();loadTelemetry();loadIdentity();loadMesh();refreshCustomWebTabs();refreshPluginIds();
 setInterval(()=>{refreshCustomWebTabs();refreshPluginIds()},5000);
 setInterval(renderUptime,60000);
 </script>

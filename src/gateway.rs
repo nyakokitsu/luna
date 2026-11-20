@@ -995,6 +995,8 @@ struct App {
     input_actions: &'static [InputAction],
     input_gestures: &'static [InputGesture],
     gpio_inputs: &'static [GpioInput],
+    mesh: Arc<Mutex<crate::mesh::Config>>,
+    peers: crate::mesh::Peers,
 }
 #[derive(Clone)]
 struct Led {
@@ -5628,6 +5630,153 @@ async fn put_telemetry(
     }
     Ok(Json(TelemetryState::from_state(state)))
 }
+#[derive(Debug, Serialize)]
+struct IdentityView {
+    station_id: String,
+    public_key: String,
+    source: String,
+    registered: bool,
+    registered_at: Option<u64>,
+    backup_at: Option<u64>,
+    endpoint: String,
+}
+
+impl IdentityView {
+    fn new(state: crate::identity::State) -> Self {
+        let registered = state.registered();
+        Self {
+            station_id: state.station_id,
+            public_key: state.public_key,
+            source: state.source,
+            registered,
+            registered_at: state.registered_at,
+            backup_at: state.backup_at,
+            endpoint: crate::identity::endpoint(),
+        }
+    }
+}
+
+async fn get_identity(State(a): State<App>) -> Result<Json<IdentityView>, ApiError> {
+    Ok(Json(IdentityView::new(crate::identity::State::load(
+        &a.root,
+    )?)))
+}
+
+async fn register_station(State(a): State<App>) -> Result<Json<IdentityView>, ApiError> {
+    let root = a.root.clone();
+    let model = a.device.lock().await.model.clone();
+    let state = task::spawn_blocking(move || crate::identity::register(&root, &model))
+        .await
+        .map_err(|error| ApiError(anyhow!("registration task failed: {error}")))??;
+    Ok(Json(IdentityView::new(state)))
+}
+
+async fn backup_configuration(State(a): State<App>) -> Result<Json<serde_json::Value>, ApiError> {
+    let root = a.root.clone();
+    let (created_at, bytes) = task::spawn_blocking(move || crate::identity::backup(&root))
+        .await
+        .map_err(|error| ApiError(anyhow!("backup task failed: {error}")))??;
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "created_at": created_at,
+        "bytes": bytes,
+        "endpoint": crate::identity::endpoint(),
+    })))
+}
+
+#[derive(Debug, Serialize)]
+struct MeshView {
+    station_id: String,
+    enabled: bool,
+    name: String,
+    main: Option<String>,
+    main_url: Option<String>,
+    peers: Vec<crate::mesh::Peer>,
+}
+
+async fn mesh_view(a: &App) -> Result<MeshView, ApiError> {
+    let identity = crate::identity::State::load(&a.root)?;
+    let config = a.mesh.lock().await.clone();
+    let peers = crate::mesh::snapshot(&a.peers).await;
+    let main_url = config.main.as_ref().and_then(|main| {
+        peers
+            .iter()
+            .find(|peer| &peer.station_id == main)
+            .map(crate::mesh::Peer::url)
+    });
+    Ok(MeshView {
+        station_id: identity.station_id,
+        enabled: config.enabled,
+        name: config.name,
+        main: config.main,
+        main_url,
+        peers,
+    })
+}
+
+async fn get_mesh(State(a): State<App>) -> Result<Json<MeshView>, ApiError> {
+    Ok(Json(mesh_view(&a).await?))
+}
+
+#[derive(Debug, Deserialize)]
+struct MeshRequest {
+    enabled: bool,
+    name: String,
+}
+
+async fn put_mesh(
+    State(a): State<App>,
+    Json(request): Json<MeshRequest>,
+) -> Result<Json<MeshView>, ApiError> {
+    let name = request.name.trim();
+    if !crate::mesh::valid_name(name) {
+        return Err(ApiError(anyhow!(
+            "mesh name must be 1..32 characters without control characters"
+        )));
+    }
+    let updated = {
+        let mut config = a.mesh.lock().await;
+        config.enabled = request.enabled;
+        config.name = name.to_owned();
+        config.clone()
+    };
+    updated.save(&a.root)?;
+    Ok(Json(mesh_view(&a).await?))
+}
+
+#[derive(Debug, Deserialize)]
+struct MeshMainRequest {
+    station_id: Option<String>,
+}
+
+async fn put_mesh_main(
+    State(a): State<App>,
+    Json(request): Json<MeshMainRequest>,
+) -> Result<Json<MeshView>, ApiError> {
+    let identity = crate::identity::State::load(&a.root)?;
+    let updated = {
+        let mut config = a.mesh.lock().await;
+        match request.station_id {
+            Some(main) if main != identity.station_id => {
+                if !crate::identity::valid_station_id(&main) {
+                    return Err(ApiError(anyhow!("invalid main station id")));
+                }
+                if !a.peers.lock().await.contains_key(&main) {
+                    return Err(ApiError(anyhow!(
+                        "station {main} is not visible in the mesh"
+                    )));
+                }
+                config.main = Some(main);
+            }
+            // None, or this station itself, makes this panel the main one.
+            _ => config.main = None,
+        }
+        config.clone()
+    };
+    updated.save(&a.root)?;
+    Ok(Json(mesh_view(&a).await?))
+}
+
 async fn device_metadata(a: &App) -> Result<DeviceMetadata> {
     Ok(DeviceMetadata {
         profile: a.device.lock().await.clone(),
@@ -6772,6 +6921,8 @@ pub async fn run_with_station(station: Option<StationSpec>) -> Result<()> {
         }
     }
     tracing::info!(model=%device.model,features=?device.features,"detected device");
+    let identity_state = crate::identity::State::load(&args.data_dir)?;
+    let mesh_config = crate::mesh::Config::load(&args.data_dir);
     let app = App {
         root: args.data_dir.clone(),
         started: Instant::now(),
@@ -6796,6 +6947,8 @@ pub async fn run_with_station(station: Option<StationSpec>) -> Result<()> {
         input_actions: station.map(|spec| spec.input_actions).unwrap_or(&[]),
         input_gestures: station.map(|spec| spec.input_gestures).unwrap_or(&[]),
         gpio_inputs: station.map(|spec| spec.gpio_inputs).unwrap_or(&[]),
+        mesh: Arc::new(Mutex::new(mesh_config)),
+        peers: crate::mesh::new_peers(),
     };
     let updater_device = app.device.lock().await.clone();
     start_auto_updater(
@@ -6806,6 +6959,20 @@ pub async fn run_with_station(station: Option<StationSpec>) -> Result<()> {
         updater_device.architecture,
     );
     start_telemetry(app.clone());
+    let mesh_web_port = args
+        .listen
+        .rsplit(':')
+        .next()
+        .and_then(|port| port.parse::<u16>().ok())
+        .unwrap_or(8099);
+    let mesh_model = app.device.lock().await.model.clone();
+    crate::mesh::start(
+        identity_state,
+        mesh_model,
+        mesh_web_port,
+        app.mesh.clone(),
+        app.peers.clone(),
+    );
     let services = {
         let device = app.device.lock().await.clone();
         app.plugins
@@ -6949,6 +7116,11 @@ pub async fn run_with_station(station: Option<StationSpec>) -> Result<()> {
             .route("/api/runtime/:id/clock/off", post(runtime_clock_off))
             .route("/api/settings", get(get_settings).put(put_settings))
             .route("/api/telemetry", get(get_telemetry).put(put_telemetry))
+            .route("/api/identity", get(get_identity))
+            .route("/api/register", post(register_station))
+            .route("/api/backup", post(backup_configuration))
+            .route("/api/mesh", get(get_mesh).put(put_mesh))
+            .route("/api/mesh/main", put(put_mesh_main))
             .route("/api/device", get(get_device).put(put_device))
             .route("/api/room", get(get_room).put(put_room))
             .route("/api/sensors", get(get_sensors))
@@ -8093,6 +8265,8 @@ mod lifecycle_tests {
             input_actions: &[],
             input_gestures: &[],
             gpio_inputs: &[],
+            mesh: Arc::new(Mutex::new(crate::mesh::Config::default())),
+            peers: crate::mesh::new_peers(),
         };
         start_package(app.clone(), "test-service".into(), vec![])
             .await

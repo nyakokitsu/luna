@@ -448,6 +448,8 @@ mod tests {
             input_actions: &[],
             input_gestures: &[],
             gpio_inputs: &[],
+            mesh: Arc::new(Mutex::new(crate::mesh::Config::default())),
+            peers: crate::mesh::new_peers(),
         }
     }
 
